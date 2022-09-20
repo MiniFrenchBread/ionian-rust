@@ -152,7 +152,7 @@ impl LogSyncManager {
             trace!("handle_data: data={:?}", data);
             match data {
                 LogFetchProgress::SyncedBlock(progress) => {
-                    self.store.read().await.put_sync_progress(progress)?;
+                    self.store.write().await.put_sync_progress(progress)?;
                 }
                 LogFetchProgress::Transaction(tx) => {
                     if !self.put_tx(tx).await {
