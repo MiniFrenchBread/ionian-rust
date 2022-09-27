@@ -161,9 +161,9 @@ impl ClientBuilder {
         if let Some(config) = config {
             let executor = require!("miner", self, runtime_context).clone().executor;
             let network_send = require!("miner", self, network).send.clone();
-            let loader = Arc::new(self.store.as_ref().unwrap().clone());
+            let store = self.store.as_ref().unwrap().clone();
 
-            let send = MineService::spawn(executor, network_send, config, loader).await?;
+            let send = MineService::spawn(executor, network_send, config, store).await?;
             self.miner = Some(MinerComponents { send });
         }
 

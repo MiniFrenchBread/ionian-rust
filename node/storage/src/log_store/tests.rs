@@ -22,7 +22,7 @@ fn test_put_get() {
         data[i * CHUNK_SIZE] = random();
     }
     let (padded_chunks, _) = compute_padded_chunk_size(data_size);
-    let mut merkle = AppendMerkleTree::<H256, Sha3Algorithm>::new(vec![H256::zero()], None);
+    let mut merkle = AppendMerkleTree::<H256, Sha3Algorithm>::new(vec![H256::zero()], 0, None);
     merkle.append_list(data_to_merkle_leaves(&LogManager::padding(start_offset - 1)).unwrap());
     let mut data_padded = data.clone();
     data_padded.append(&mut vec![0u8; CHUNK_SIZE]);
@@ -124,6 +124,7 @@ fn test_root() {
         println!("{:?} {}", mt.root(), hex::encode(&mt.root()));
         let append_mt = AppendMerkleTree::<H256, Sha3Algorithm>::new(
             data_to_merkle_leaves(&data).unwrap(),
+            0,
             None,
         );
         assert_eq!(mt.root(), append_mt.root().0);

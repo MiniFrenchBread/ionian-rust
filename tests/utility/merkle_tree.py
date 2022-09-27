@@ -17,17 +17,17 @@ def add_0x_prefix(val):
 
 
 class Hasher:
-    def __init__(self, algorithm="keccak_256", encoding="utf-8", security=True):
+    def __init__(self, algorithm="keccak_256", encoding="utf-8", security=False):
         self.algorithm = algorithm
         self.security = security
         self.encoding = encoding
 
         if security:
-            self.prefx00 = "\x00".encode(encoding)
-            self.prefx01 = "\x01".encode(encoding)
+            self.prefix00 = "\x00".encode(encoding)
+            self.prefix01 = "\x01".encode(encoding)
         else:
-            self.prefx00 = bytes()
-            self.prefx01 = bytes()
+            self.prefix00 = bytes()
+            self.prefix01 = bytes()
 
     def _hasher(self):
         if self.algorithm == "keccak_256":
@@ -36,7 +36,7 @@ class Hasher:
             raise NotImplementedError
 
     def hash_data(self, data):
-        buff = self.prefx00 + (
+        buff = self.prefix00 + (
             data if isinstance(data, bytes) else data.encode(self.encoding)
         )
 
@@ -46,7 +46,7 @@ class Hasher:
 
     def hash_pair(self, left, right):
         buff = (
-            self.prefx01
+            self.prefix01
             + bytes.fromhex(left.decode("utf-8"))
             + bytes.fromhex(right.decode("utf-8"))
         )

@@ -3,12 +3,14 @@ mod sha3;
 
 use anyhow::{anyhow, bail, Result};
 use ethereum_types::H256;
+use lazy_static::lazy_static;
 use ssz::{Decode, Encode};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use tracing::trace;
 
 pub use proof::{Proof, RangeProof};
 pub use sha3::Sha3Algorithm;
@@ -24,16 +26,20 @@ pub struct AppendMerkleTree<E: HashElement, A: Algorithm<E>> {
     /// For `last_chunk_merkle` after the first chunk, this is set to `Some(10)` so that
     /// `revert_to` can reset the state correctly when needed.
     min_depth: Option<usize>,
+    /// Used to compute the correct padding hash.
+    /// 0 for `pora_chunk_merkle` and 10 for not-first `last_chunk_merkle`.
+    leaf_height: usize,
     _a: PhantomData<A>,
 }
 
 impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
-    pub fn new(leaves: Vec<E>, start_tx_seq: Option<u64>) -> Self {
+    pub fn new(leaves: Vec<E>, leaf_height: usize, start_tx_seq: Option<u64>) -> Self {
         let mut merkle = Self {
             layers: vec![leaves],
             delta_nodes_map: HashMap::new(),
             tx_seq_to_root_map: HashMap::new(),
             min_depth: None,
+            leaf_height,
             _a: Default::default(),
         };
         if merkle.leaves() == 0 {
@@ -52,6 +58,7 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
 
     pub fn new_with_subtrees(
         subtree_root_list: Vec<(usize, E)>,
+        leaf_height: usize,
         start_tx_seq: Option<u64>,
     ) -> Result<Self> {
         let mut merkle = Self {
@@ -59,6 +66,7 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
             delta_nodes_map: HashMap::new(),
             tx_seq_to_root_map: HashMap::new(),
             min_depth: None,
+            leaf_height,
             _a: Default::default(),
         };
         if subtree_root_list.is_empty() {
@@ -72,6 +80,7 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
         Ok(merkle)
     }
 
+    /// This is only used for the last chunk, so `leaf_height` is always 0 so far.
     pub fn new_with_depth(leaves: Vec<E>, depth: usize, start_tx_seq: Option<u64>) -> Self {
         if leaves.is_empty() {
             // Create an empty merkle tree with `depth`.
@@ -80,6 +89,7 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
                 delta_nodes_map: HashMap::new(),
                 tx_seq_to_root_map: HashMap::new(),
                 min_depth: Some(depth),
+                leaf_height: 0,
                 _a: Default::default(),
             };
             if let Some(seq) = start_tx_seq {
@@ -94,6 +104,7 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
                 delta_nodes_map: HashMap::new(),
                 tx_seq_to_root_map: HashMap::new(),
                 min_depth: Some(depth),
+                leaf_height: 0,
                 _a: Default::default(),
             };
             // Reconstruct the whole tree.
@@ -192,11 +203,17 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
         let mut index_in_layer = leaf_index;
         lemma.push(self.layers[0][leaf_index].clone());
         for height in 0..(self.layers.len() - 1) {
+            trace!(
+                "gen_proof: height={} index={} hash={:?}",
+                height,
+                index_in_layer,
+                self.layers[height][index_in_layer]
+            );
             if index_in_layer % 2 == 0 {
                 path.push(true);
                 if index_in_layer + 1 == self.layers[height].len() {
                     // TODO: This can be skipped if the tree size is available in validation.
-                    lemma.push(E::end_pad());
+                    lemma.push(E::end_pad(height + self.leaf_height));
                 } else {
                     lemma.push(self.layers[height][index_in_layer + 1].clone());
                 }
@@ -317,7 +334,7 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
                 let parent = if *r == E::null() {
                     E::null()
                 } else {
-                    A::parent_single(r)
+                    A::parent_single(r, height + self.leaf_height)
                 };
                 parent_update.push((next_layer_start_index + i, parent));
             }
@@ -368,7 +385,10 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
             bail!("Subtree depth should not be zero!");
         }
         if self.leaves() % (1 << (subtree_depth - 1)) != 0 {
-            bail!("The current leaves count is aligned with the merged subtree");
+            bail!(
+                "The current leaves count is aligned with the merged subtree, leaves={}",
+                self.leaves()
+            );
         }
         for height in 0..(subtree_depth - 1) {
             self.before_extend_layer(height);
@@ -470,7 +490,7 @@ struct HistoryTree<'m, E: HashElement> {
 pub trait HashElement:
     Clone + Debug + Eq + Hash + AsRef<[u8]> + AsMut<[u8]> + Decode + Encode + Send + Sync
 {
-    fn end_pad() -> Self;
+    fn end_pad(height: usize) -> Self;
     fn null() -> Self;
     fn is_null(&self) -> bool {
         self == &Self::null()
@@ -478,8 +498,8 @@ pub trait HashElement:
 }
 
 impl HashElement for H256 {
-    fn end_pad() -> Self {
-        H256::repeat_byte(u8::MAX)
+    fn end_pad(height: usize) -> Self {
+        ZERO_HASHES[height]
     }
 
     fn null() -> Self {
@@ -487,10 +507,22 @@ impl HashElement for H256 {
     }
 }
 
+lazy_static! {
+    static ref ZERO_HASHES: [H256; 64] = {
+        let leaf_zero_hash: H256 = Sha3Algorithm::leaf(&[0u8; 256]);
+        let mut list = [H256::zero(); 64];
+        list[0] = leaf_zero_hash;
+        for i in 1..list.len() {
+            list[i] = Sha3Algorithm::parent(&list[i - 1], &list[i - 1]);
+        }
+        list
+    };
+}
+
 pub trait Algorithm<E: HashElement> {
     fn parent(left: &E, right: &E) -> E;
-    fn parent_single(r: &E) -> E {
-        Self::parent(r, &E::end_pad())
+    fn parent_single(r: &E, height: usize) -> E {
+        Self::parent(r, &E::end_pad(height))
     }
     fn leaf(data: &[u8]) -> E;
 }
@@ -527,7 +559,8 @@ mod tests {
             for _ in 0..entry_len {
                 data.push(H256::random());
             }
-            let mut merkle = AppendMerkleTree::<H256, Sha3Algorithm>::new(vec![H256::zero()], None);
+            let mut merkle =
+                AppendMerkleTree::<H256, Sha3Algorithm>::new(vec![H256::zero()], 0, None);
             merkle.append_list(data.clone());
             merkle.commit(Some(0));
             verify(&data, &merkle);

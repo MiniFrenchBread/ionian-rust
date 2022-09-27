@@ -396,7 +396,6 @@ impl SerialSyncController {
             self.state = SyncState::Failed { reason: err };
             return;
         }
-
         self.state = SyncState::Completed;
     }
 

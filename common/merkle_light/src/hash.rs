@@ -95,12 +95,6 @@ pub trait Hashable<H: Hasher> {
     }
 }
 
-/// MT leaf hash prefix
-const LEAF: u8 = 0x00;
-
-/// MT interior node hash prefix
-const INTERIOR: u8 = 0x01;
-
 /// A trait for hashing an arbitrary stream of bytes for calculating merkle tree
 /// nodes.
 ///
@@ -127,7 +121,6 @@ where
     /// Returns hash value for MT leaf (prefix 0x00).
     #[inline]
     fn leaf(&mut self, leaf: T) -> T {
-        self.write(&[LEAF]);
         self.write(leaf.as_ref());
         self.hash()
     }
@@ -135,7 +128,6 @@ where
     /// Returns hash value for MT interior node (prefix 0x01).
     #[inline]
     fn node(&mut self, left: T, right: T) -> T {
-        self.write(&[INTERIOR]);
         self.write(left.as_ref());
         self.write(right.as_ref());
         self.hash()

@@ -1,9 +1,10 @@
 use crate::submitter::Submitter;
-use crate::{config::MinerConfig, mine::PoraService, watcher::MineContextWatcher, PoraLoader};
+use crate::{config::MinerConfig, mine::PoraService, watcher::MineContextWatcher};
 use network::NetworkMessage;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use storage::log_store::Store;
 use tokio::sync::mpsc;
+use tokio::sync::{broadcast, RwLock};
 
 #[derive(Clone, Debug)]
 pub enum MinerMessage {
@@ -22,7 +23,7 @@ impl MineService {
         executor: task_executor::TaskExecutor,
         _network_send: mpsc::UnboundedSender<NetworkMessage>,
         config: MinerConfig,
-        loader: Arc<dyn PoraLoader>,
+        store: Arc<RwLock<dyn Store>>,
     ) -> Result<broadcast::Sender<MinerMessage>, String> {
         let provider = Arc::new(config.make_provider().await?);
 
@@ -39,11 +40,11 @@ impl MineService {
             executor.clone(),
             msg_recv.resubscribe(),
             mine_context_receiver,
-            loader,
+            Arc::new(store.clone()),
             &config,
         );
 
-        Submitter::spawn(executor, mine_answer_receiver, provider, &config);
+        Submitter::spawn(executor, mine_answer_receiver, provider, store, &config);
 
         debug!("Starting miner service");
 

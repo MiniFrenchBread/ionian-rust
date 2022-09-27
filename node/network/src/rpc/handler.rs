@@ -975,11 +975,7 @@ async fn send_message_to_inbound_substream(
             let close_result = substream.close().await.map(|_| (substream, true));
             // If there was an error in sending, return this error, otherwise, return the
             // result of closing the substream.
-            if let Err(e) = send_result {
-                return Err(e);
-            } else {
-                return close_result;
-            }
+            return send_result.and(close_result);
         }
         // Everything worked as expected return the result.
         send_result.map(|_| (substream, false))

@@ -19,7 +19,7 @@ use shared_types::{
 };
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace};
 
 /// 256 Bytes
 pub const ENTRY_SIZE: usize = 256;
@@ -262,6 +262,26 @@ impl LogStoreRead for LogManager {
     fn next_tx_seq(&self) -> Result<u64> {
         self.tx_store.next_tx_seq()
     }
+
+    fn get_proof_for_flow_index_range(
+        &self,
+        index: u64,
+        length: u64,
+    ) -> crate::error::Result<FlowRangeProof> {
+        let left_proof = self.gen_proof(index)?;
+        let right_proof = self.gen_proof(index + length - 1)?;
+        Ok(FlowRangeProof {
+            left_proof,
+            right_proof,
+        })
+    }
+
+    fn get_context(&self) -> crate::error::Result<(DataRoot, u64)> {
+        Ok((
+            *self.pora_chunks_merkle.root(),
+            self.last_chunk_start_index() + self.last_chunk_merkle.leaves() as u64,
+        ))
+    }
 }
 
 impl Configurable for LogManager {
@@ -298,7 +318,8 @@ impl LogManager {
         } else {
             None
         };
-        let mut pora_chunks_merkle = Merkle::new_with_subtrees(chunk_roots, start_tx_seq)?;
+        let mut pora_chunks_merkle =
+            Merkle::new_with_subtrees(chunk_roots, log2_pow2(PORA_CHUNK_SIZE), start_tx_seq)?;
         let last_chunk_merkle = match start_tx_seq {
             Some(tx_seq) => {
                 tx_store.rebuild_last_chunk_merkle(pora_chunks_merkle.leaves(), tx_seq)?
@@ -432,19 +453,24 @@ impl LogManager {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     fn pad_tx(&mut self, first_subtree_size: u64) -> Result<()> {
         // Check if we need to pad the flow.
-        let tx_start_flow_index = if self.pora_chunks_merkle.leaves() != 0 {
-            (self.pora_chunks_merkle.leaves() - 1) as u64 * PORA_CHUNK_SIZE as u64
-                + self.last_chunk_merkle.leaves() as u64
-        } else {
-            assert_eq!(self.last_chunk_merkle.leaves(), 0);
-            0
-        };
+        let tx_start_flow_index =
+            self.last_chunk_start_index() + self.last_chunk_merkle.leaves() as u64;
         let extra = tx_start_flow_index % first_subtree_size;
+        trace!(
+            "before pad_tx {} {}",
+            self.pora_chunks_merkle.leaves(),
+            self.last_chunk_merkle.leaves()
+        );
         if extra != 0 {
             let pad_data = Self::padding((first_subtree_size - extra) as usize);
-            let last_chunk_pad = (PORA_CHUNK_SIZE - self.last_chunk_merkle.leaves()) * ENTRY_SIZE;
+            let last_chunk_pad = if self.last_chunk_merkle.leaves() == 0 {
+                0
+            } else {
+                (PORA_CHUNK_SIZE - self.last_chunk_merkle.leaves()) * ENTRY_SIZE
+            };
             if pad_data.len() < last_chunk_pad {
                 self.last_chunk_merkle
                     .append_list(data_to_merkle_leaves(&pad_data)?);
@@ -455,26 +481,28 @@ impl LogManager {
                     start_index: tx_start_flow_index,
                 })?;
             } else {
-                self.last_chunk_merkle
-                    .append_list(data_to_merkle_leaves(&pad_data[..last_chunk_pad])?);
-                self.pora_chunks_merkle
-                    .update_last(*self.last_chunk_merkle.root());
-                self.flow_store.append_entries(ChunkArray {
-                    data: pad_data[..last_chunk_pad].to_vec(),
-                    start_index: tx_start_flow_index as u64,
-                })?;
-
-                self.last_chunk_merkle =
-                    Merkle::new_with_depth(vec![], log2_pow2(PORA_CHUNK_SIZE) + 1, None);
-                let mut start_index = last_chunk_pad / ENTRY_SIZE;
+                if last_chunk_pad != 0 {
+                    // Pad the last chunk.
+                    self.last_chunk_merkle
+                        .append_list(data_to_merkle_leaves(&pad_data[..last_chunk_pad])?);
+                    self.pora_chunks_merkle
+                        .update_last(*self.last_chunk_merkle.root());
+                    self.flow_store.append_entries(ChunkArray {
+                        data: pad_data[..last_chunk_pad].to_vec(),
+                        start_index: tx_start_flow_index as u64,
+                    })?;
+                    self.last_chunk_merkle =
+                        Merkle::new_with_depth(vec![], log2_pow2(PORA_CHUNK_SIZE) + 1, None);
+                }
 
                 // Pad with more complete chunks.
+                let mut start_index = last_chunk_pad / ENTRY_SIZE;
                 while pad_data.len() >= (start_index + PORA_CHUNK_SIZE) * ENTRY_SIZE {
                     let data = pad_data
                         [start_index * ENTRY_SIZE..(start_index + PORA_CHUNK_SIZE) * ENTRY_SIZE]
                         .to_vec();
                     self.pora_chunks_merkle
-                        .append(*Merkle::new(data_to_merkle_leaves(&data)?, None).root());
+                        .append(*Merkle::new(data_to_merkle_leaves(&data)?, 0, None).root());
                     self.flow_store.append_entries(ChunkArray {
                         data,
                         start_index: start_index as u64 + tx_start_flow_index,
@@ -484,6 +512,11 @@ impl LogManager {
                 assert_eq!(pad_data.len(), start_index * ENTRY_SIZE);
             }
         }
+        trace!(
+            "after pad_tx {} {}",
+            self.pora_chunks_merkle.leaves(),
+            self.last_chunk_merkle.leaves()
+        );
         Ok(())
     }
 

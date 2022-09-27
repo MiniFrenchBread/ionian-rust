@@ -12,6 +12,18 @@ BSC_CONFIG = dict(
     Verbosity=5,
 )
 
+CONFLUX_CONFIG = dict(
+    mode="dev",
+    jsonrpc_http_eth_port=8545,
+    port=32323,
+    log_level="debug",
+    log_file="./conflux.log",
+    public_address="127.0.0.1",
+    # dev_allow_phase_change_without_peer="true",
+    # dev_block_interval_ms=50,
+)
+
+BLOCK_SIZE_LIMIT = 200 * 1024
 GENESIS_PRIV_KEY = "46b9e861b63d3509c88b7817275a30d22d62c8cd8fa6486ddee35ef0d8e0495f"
 MINER_ID = "308a6e102a5829ba35e4ba1da0473c3e8bd45f5d3ffb91e31adb43f25463dddb"
 GENESIS_ACCOUNT = Web3().eth.account.from_key(GENESIS_PRIV_KEY)

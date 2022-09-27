@@ -69,6 +69,11 @@ impl<'a> Miner<'a> {
             .is_covered(self.start_position + recall_offset * SECTORS_PER_LOADING as u64)
             .unwrap()
         {
+            trace!(
+                "recall offset not in range: recall_offset={}, range={:?}",
+                recall_offset,
+                self.custom_mine_range
+            );
             return None;
         }
 

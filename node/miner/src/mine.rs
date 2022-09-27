@@ -106,6 +106,7 @@ impl PoraService {
                 biased;
 
                 v = self.msg_recv.recv(), if channel_opened => {
+                    trace!("PoraService receives msg={:?}", v);
                     match v {
                         Ok(MinerMessage::ToggleMining(enable)) => {
                             info!("Toggle mining: {}", if enable { "on" } else { "off" });
@@ -130,6 +131,7 @@ impl PoraService {
                 }
 
                 maybe_msg = self.mine_context_receiver.recv() => {
+                    trace!("PoraService receives context={:?}", maybe_msg);
                     if let Some(msg) = maybe_msg {
                         debug!("Update mine service: {:?}", msg);
                         self.puzzle = msg.map(|(context, target_quality)| PoraPuzzle {

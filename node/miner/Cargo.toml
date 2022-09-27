@@ -17,3 +17,4 @@ rand = "^0.8"
 ethers = { git = "https://github.com/k-huetsch/ethers-rs.git", branch="ionian-dev", features = ["ws", "rustls", "abigen"] }
 lazy_static = "1.4"
 async-trait = "0.1.56"
+shared_types = { path = "../shared_types" }

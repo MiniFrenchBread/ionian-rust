@@ -22,7 +22,7 @@ impl PoraLoader for Arc<RwLock<dyn Store>> {
         let store = &*self.read().await;
         let mut data_chunks = [[0u8; BYTES_PER_SEAL]; SEALS_PER_LOADING];
         let mut validities = [false; SEALS_PER_LOADING];
-        let mut flow_index = index;
+        let flow_index = index;
 
         for ((idx, chunk), valid_bit) in data_chunks
             .iter_mut()
@@ -39,7 +39,6 @@ impl PoraLoader for Arc<RwLock<dyn Store>> {
                 chunk.copy_from_slice(&chunk_array.data);
                 *valid_bit = true;
             }
-            flow_index += SECTORS_PER_SEAL as u64;
         }
 
         let data_chunks: [u8; BYTES_PER_LOADING] = unsafe { std::mem::transmute(data_chunks) };

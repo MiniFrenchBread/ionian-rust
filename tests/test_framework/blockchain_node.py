@@ -234,6 +234,9 @@ class BlockchainNode(TestNode):
     def wait_for_start_mining(self):
         self._wait_for_rpc_connection(lambda rpc: int(rpc.eth_blockNumber(), 16) > 0)
 
+    def wait_for_transaction_receipt(self, w3, tx_hash, timeout=120):
+        return w3.eth.wait_for_transaction_receipt(tx_hash, timeout)
+
     def setup_contract(self):
         w3 = Web3(HTTPProvider(self.rpc_url))
 
@@ -249,7 +252,7 @@ class BlockchainNode(TestNode):
                 bytecode=contract_interface["bytecode"],
             )
             tx_hash = contract.constructor(*args).transact(TX_PARAMS)
-            tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+            tx_receipt = self.wait_for_transaction_receipt(w3, tx_hash)
             contract = w3.eth.contract(
                 address=tx_receipt.contractAddress,
                 abi=contract_interface["abi"],
@@ -265,7 +268,7 @@ class BlockchainNode(TestNode):
         self.log.debug("Flow deployed")
         mine_contract, _ = deploy_contract(
             self.mine_contract_path,
-            [flow_contract.address, NO_SEAL_FLAG | NO_MERKLE_PROOF_FLAG],
+            [flow_contract.address, NO_SEAL_FLAG],
         )
         self.log.debug("Mine deployed")
         self.log.info("All contracts deployed")
@@ -273,10 +276,10 @@ class BlockchainNode(TestNode):
         tx_hash = token_contract.functions.approve(
             flow_contract.address, int(1e9)
         ).transact(TX_PARAMS)
-        w3.eth.wait_for_transaction_receipt(tx_hash)
+        self.wait_for_transaction_receipt(w3, tx_hash)
 
         tx_hash = mine_contract.functions.setMiner(MINER_ID).transact(TX_PARAMS)
-        w3.eth.wait_for_transaction_receipt(tx_hash)
+        self.wait_for_transaction_receipt(w3, tx_hash)
 
         return flow_contract, flow_contract_hash, mine_contract
 

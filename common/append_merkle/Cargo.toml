@@ -10,3 +10,5 @@ tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 eth2_ssz = "0.4.0"
 eth2_ssz_derive = "0.3.0"
 serde = { version = "1.0.137", features = ["derive"] }
+lazy_static = "1.4.0"
+tracing = "0.1.36"

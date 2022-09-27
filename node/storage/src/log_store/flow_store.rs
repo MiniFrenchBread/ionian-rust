@@ -186,7 +186,8 @@ impl FlowDBStore {
                             let mut leaves = vec![H256::zero()];
                             leaves.append(&mut data_to_merkle_leaves(&p[0].data)?);
                             let root =
-                                *AppendMerkleTree::<H256, Sha3Algorithm>::new(leaves, None).root();
+                                *AppendMerkleTree::<H256, Sha3Algorithm>::new(leaves, 0, None)
+                                    .root();
                             tx.put(
                                 COL_ENTRY_BATCH_ROOT,
                                 &batch_index.to_be_bytes(),

@@ -2,8 +2,6 @@
 
 from test_framework.test_framework import TestFramework
 from config.node_config import MINER_ID, GENESIS_PRIV_KEY
-from utility.utils import create_proof_and_segment, generate_data_root, wait_until
-import time
 from utility.submission import create_submission, submit_data
 from utility.utils import wait_until
 
@@ -17,10 +15,10 @@ class MineTest(TestFramework):
             "miner_key": GENESIS_PRIV_KEY,
         }
 
-    def submit_data(self, item):
+    def submit_data(self, item, size):
         submissions_before = self.contract.num_submissions()
         client = self.nodes[0]
-        chunk_data = item * 500 * 1024
+        chunk_data = item * 256 * size
         submissions, data_root = create_submission(chunk_data)
         self.contract.submit(submissions)
         wait_until(lambda: self.contract.num_submissions() == submissions_before + 1)
@@ -39,7 +37,7 @@ class MineTest(TestFramework):
         self.mine_contract.set_quality(quality)
 
         self.log.info("Submit the first data chunk")
-        self.submit_data(b"\x11")
+        self.submit_data(b"\x11", 2000)
 
         self.log.info("Wait for the first mine context release")
         wait_until(lambda: int(blockchain.eth_blockNumber(), 16) > 100, timeout=180)
@@ -54,7 +52,7 @@ class MineTest(TestFramework):
         wait_until(lambda: self.mine_contract.last_mined_epoch() == 2)
 
         self.log.info("Submit the second data chunk")
-        self.submit_data(b"\x22")
+        self.submit_data(b"\x22", 2000)
 
         self.log.info("Wait for the third mine context release")
         wait_until(lambda: int(blockchain.eth_blockNumber(), 16) > 300, timeout=180)

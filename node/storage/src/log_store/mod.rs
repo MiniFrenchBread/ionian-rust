@@ -1,5 +1,7 @@
 use ethereum_types::H256;
-use shared_types::{Chunk, ChunkArray, ChunkArrayWithProof, ChunkWithProof, DataRoot, Transaction};
+use shared_types::{
+    Chunk, ChunkArray, ChunkArrayWithProof, ChunkWithProof, DataRoot, FlowRangeProof, Transaction,
+};
 
 use crate::error::Result;
 
@@ -40,6 +42,11 @@ pub trait LogStoreRead: LogStoreChunkRead {
     fn get_sync_progress(&self) -> Result<Option<(u64, H256)>>;
 
     fn validate_range_proof(&self, tx_seq: u64, data: &ChunkArrayWithProof) -> Result<bool>;
+
+    fn get_proof_for_flow_index_range(&self, index: u64, length: u64) -> Result<FlowRangeProof>;
+
+    /// Return flow root and length.
+    fn get_context(&self) -> Result<(DataRoot, u64)>;
 }
 
 pub trait LogStoreChunkRead {

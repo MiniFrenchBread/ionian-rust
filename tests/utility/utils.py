@@ -26,12 +26,16 @@ def rpc_port(n):
     return PortMin.n + MAX_NODES + n
 
 
-def blockchain_rpc_port(n):
+def blockchain_p2p_port(n):
     return PortMin.n + 2 * MAX_NODES + n
 
 
-def blockchain_p2p_port(n):
+def blockchain_rpc_port(n):
     return PortMin.n + 3 * MAX_NODES + n
+
+
+def blockchain_rpc_port_core(n):
+    return PortMin.n + 4 * MAX_NODES + n
 
 
 def wait_until(predicate, *, attempts=float("inf"), timeout=float("inf"), lock=None):
@@ -75,7 +79,11 @@ def initialize_config(config_path, config_parameters):
             if isinstance(value, str) and not (
                 value.startswith('"') or value.startswith("'")
             ):
-                value = f'"{value}"'
+                if value == "true" or value == "false":
+                    value = f"{value}"
+                else:
+                    value = f'"{value}"'
+
             f.write(f"{k}={value}\n")
 
 
@@ -87,14 +95,6 @@ def initialize_ionian_config(data_dir, config_parameters):
     initialize_config(config_path, local_conf)
     with open(log_config_path, "w") as f:
         f.write("trace")
-
-
-def generate_data_root(chunk_data):
-    keccak = sha3.keccak_256()
-    keccak.update(b"\x00")
-    keccak.update(chunk_data)
-    data_root = encode_hex(keccak.digest())
-    return data_root
 
 
 def create_proof_and_segment(chunk_data, data_root, index=0):

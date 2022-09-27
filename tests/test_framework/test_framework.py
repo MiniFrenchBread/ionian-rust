@@ -16,6 +16,7 @@ from test_framework.bsc_node import BSCNode
 from test_framework.contract_proxy import FlowContractProxy, MineContractProxy
 from test_framework.ionian_node import IonianNode
 from test_framework.blockchain_node import BlockChainNodeType
+from test_framework.conflux_node import ConfluxNode
 
 from utility.utils import PortMin, is_windows_platform, wait_until
 
@@ -49,8 +50,9 @@ class TestFramework:
             else:
                 updated_config = {}
 
-            node = (
-                BSCNode(
+            node = None
+            if self.blockchain_node_type == BlockChainNodeType.BSC:
+                node = BSCNode(
                     i,
                     self.root_dir,
                     self.blockchain_binary,
@@ -61,9 +63,20 @@ class TestFramework:
                     self.log,
                     60,
                 )
-                if self.blockchain_node_type == BlockChainNodeType.BSC
-                else None
-            )
+            elif self.blockchain_node_type == BlockChainNodeType.Conflux:
+                node = ConfluxNode(
+                    i,
+                    self.root_dir,
+                    self.blockchain_binary,
+                    updated_config,
+                    self.contract_path,
+                    self.token_contract_path,
+                    self.mine_contract_path,
+                    self.log,
+                )
+            else:
+                raise NotImplementedError
+
             self.blockchain_nodes.append(node)
             node.setup_config()
             node.start()
