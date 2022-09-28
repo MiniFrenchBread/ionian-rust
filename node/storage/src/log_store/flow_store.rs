@@ -1,19 +1,17 @@
+use super::load_chunk::EntryBatch;
 use crate::error::Error;
 use crate::log_store::log_manager::{
-    bytes_to_entries, data_to_merkle_leaves, sub_merkle_tree, COL_ENTRY_BATCH,
-    COL_ENTRY_BATCH_ROOT, ENTRY_SIZE, PORA_CHUNK_SIZE,
+    bytes_to_entries, COL_ENTRY_BATCH, COL_ENTRY_BATCH_ROOT, ENTRY_SIZE, PORA_CHUNK_SIZE,
 };
 use crate::log_store::{FlowRead, FlowWrite};
 use crate::{try_option, IonianKeyValueDB};
 use anyhow::{anyhow, bail, Result};
-use append_merkle::{AppendMerkleTree, Sha3Algorithm};
-use ethereum_types::H256;
-use shared_types::{bytes_to_chunks, ChunkArray, DataRoot};
-use ssz::{Decode, DecodeError, Encode};
+use shared_types::{ChunkArray, DataRoot};
+use ssz::{Decode, Encode};
 use ssz_derive::{Decode as DeriveDecode, Encode as DeriveEncode};
-use std::fmt::{Debug, Formatter};
+use std::cmp;
+use std::fmt::Debug;
 use std::sync::Arc;
-use std::{cmp, mem};
 use tracing::trace;
 
 pub struct FlowStore {
@@ -71,10 +69,10 @@ impl FlowRead for FlowStore {
                 length -= 1;
             }
 
-            data.append(&mut try_option!(try_option!(self
-                .db
-                .get_entry_batch(chunk_index)?)
-            .get_data(offset as usize, length as usize)));
+            let entry_batch = try_option!(self.db.get_entry_batch(chunk_index)?);
+            let mut entry_batch_data =
+                try_option!(entry_batch.get_data(offset as usize, length as usize));
+            data.append(&mut entry_batch_data);
         }
         Ok(Some(ChunkArray {
             data,
@@ -116,30 +114,26 @@ impl FlowWrite for FlowStore {
             let chunk = data
                 .sub_array(start_entry_index, end_entry_index)
                 .expect("in range");
+
             let chunk_index = chunk.start_index / self.config.batch_size as u64;
-            let batch = if chunk.data.len() != self.config.batch_size * ENTRY_SIZE {
-                // We are writing partial data.
-                // TODO: Try to avoid loading from db if possible.
-                match self.db.get_entry_batch(chunk_index)? {
-                    None => {
-                        // no data in db, so just store the new data.
-                        EntryBatch::Incomplete(vec![PartialBatch {
-                            start_offset: (chunk.start_index % self.config.batch_size as u64)
-                                as usize,
-                            data: chunk.data,
-                        }])
-                    }
-                    Some(mut data_in_db) => {
-                        data_in_db.insert_data(
-                            (chunk.start_index % self.config.batch_size as u64) as usize,
-                            chunk.data,
-                        )?;
-                        data_in_db
-                    }
+
+            // TODO: Try to avoid loading from db if possible.
+            let batch = match self.db.get_entry_batch(chunk_index)? {
+                None => {
+                    let start_offset = chunk.start_index as usize % self.config.batch_size;
+                    let is_full_chunk = chunk.data.len() == self.config.batch_size * ENTRY_SIZE;
+                    EntryBatch::new_with_chunk_array(chunk, start_offset, is_full_chunk)
                 }
-            } else {
-                EntryBatch::Complete(chunk.data)
+                Some(mut data_in_db) => {
+                    data_in_db.insert_data(
+                        (chunk.start_index % self.config.batch_size as u64) as usize,
+                        chunk.data,
+                    )?;
+                    data_in_db
+                }
             };
+
+            // TODO(kevin, sealing): collect sealing position
             batch_list.push((chunk_index, batch));
         }
         self.db.put_entry_batch_list(batch_list)
@@ -165,42 +159,13 @@ impl FlowDBStore {
     ) -> Result<Vec<(u64, DataRoot)>> {
         let mut completed_batches = Vec::new();
         let mut tx = self.kvdb.transaction();
-        for (batch_index, data) in batch_list {
+        for (batch_index, batch) in batch_list {
             tx.put(
                 COL_ENTRY_BATCH,
                 &batch_index.to_be_bytes(),
-                &data.as_ssz_bytes(),
+                &batch.as_ssz_bytes(),
             );
-            if batch_index == 0 {
-                // Special case because the first entry hash is initialized as 0.
-                match data {
-                    EntryBatch::Complete(_) => {
-                        bail!("Unexpected first batch");
-                    }
-                    EntryBatch::Incomplete(p) => {
-                        trace!("put first batch: {:?}", p);
-                        if p.len() == 1
-                            && p[0].start_offset == 1
-                            && p[0].data.len() == ENTRY_SIZE * (PORA_CHUNK_SIZE - 1)
-                        {
-                            let mut leaves = vec![H256::zero()];
-                            leaves.append(&mut data_to_merkle_leaves(&p[0].data)?);
-                            let root =
-                                *AppendMerkleTree::<H256, Sha3Algorithm>::new(leaves, 0, None)
-                                    .root();
-                            tx.put(
-                                COL_ENTRY_BATCH_ROOT,
-                                &batch_index.to_be_bytes(),
-                                &BatchRoot::Single(root).as_ssz_bytes(),
-                            );
-                            completed_batches.push((batch_index, root));
-                        }
-                    }
-                }
-            } else if let EntryBatch::Complete(raw_data) = &data {
-                // TODO(zz): Check if we want to insert here.
-                assert_eq!(raw_data.len(), ENTRY_SIZE * PORA_CHUNK_SIZE);
-                let root: DataRoot = sub_merkle_tree(raw_data.as_slice())?.root().into();
+            if let Some(root) = batch.build_root(batch_index == 0)? {
                 tx.put(
                     COL_ENTRY_BATCH_ROOT,
                     &batch_index.to_be_bytes(),
@@ -272,250 +237,11 @@ impl FlowDBStore {
     }
 }
 
-enum EntryBatch {
-    Complete(Vec<u8>),
-    /// All `PartialBatch`s are ordered based on `start_index`.
-    Incomplete(Vec<PartialBatch>),
-}
-
-const COMPLETE_BATCH_TYPE: u8 = 0;
-const INCOMPLETE_BATCH_TYPE: u8 = 1;
-
-impl Encode for EntryBatch {
-    fn is_ssz_fixed_len() -> bool {
-        false
-    }
-
-    fn ssz_append(&self, buf: &mut Vec<u8>) {
-        match &self {
-            EntryBatch::Complete(data) => {
-                buf.extend_from_slice(&[COMPLETE_BATCH_TYPE]);
-                buf.extend_from_slice(data.as_slice());
-            }
-            EntryBatch::Incomplete(data_list) => {
-                buf.extend_from_slice(&[INCOMPLETE_BATCH_TYPE]);
-                buf.extend_from_slice(&data_list.as_ssz_bytes());
-            }
-        }
-    }
-
-    fn ssz_bytes_len(&self) -> usize {
-        match &self {
-            EntryBatch::Complete(data) => 1 + data.len(),
-            EntryBatch::Incomplete(batch_list) => 1 + batch_list.ssz_bytes_len(),
-        }
-    }
-}
-
-impl Decode for EntryBatch {
-    fn is_ssz_fixed_len() -> bool {
-        false
-    }
-
-    fn from_ssz_bytes(bytes: &[u8]) -> std::result::Result<Self, DecodeError> {
-        match *bytes.first().ok_or(DecodeError::ZeroLengthItem)? {
-            COMPLETE_BATCH_TYPE => Ok(EntryBatch::Complete(bytes[1..].to_vec())),
-            INCOMPLETE_BATCH_TYPE => Ok(EntryBatch::Incomplete(
-                <Vec<PartialBatch> as Decode>::from_ssz_bytes(&bytes[1..])?,
-            )),
-            _ => unreachable!(),
-        }
-    }
-}
-
 #[derive(DeriveEncode, DeriveDecode)]
 #[ssz(enum_behaviour = "union")]
 pub enum BatchRoot {
     Single(DataRoot),
     Multiple((usize, DataRoot)),
-}
-
-struct PartialBatch {
-    /// Offset in this batch.
-    start_offset: usize,
-    data: Vec<u8>,
-}
-
-impl Debug for PartialBatch {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "PartialBatch: start_offset={} data_len={}",
-            self.start_offset,
-            self.data.len()
-        )
-    }
-}
-
-impl Encode for PartialBatch {
-    fn is_ssz_fixed_len() -> bool {
-        false
-    }
-
-    fn ssz_append(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.start_offset.to_be_bytes());
-        buf.extend_from_slice(&self.data);
-    }
-
-    fn ssz_bytes_len(&self) -> usize {
-        1 + self.data.len()
-    }
-}
-
-impl Decode for PartialBatch {
-    fn is_ssz_fixed_len() -> bool {
-        false
-    }
-
-    fn from_ssz_bytes(bytes: &[u8]) -> std::result::Result<Self, DecodeError> {
-        Ok(Self {
-            start_offset: usize::from_be_bytes(
-                bytes[..mem::size_of::<usize>()].try_into().unwrap(),
-            ),
-            data: bytes[mem::size_of::<usize>()..].to_vec(),
-        })
-    }
-}
-
-impl PartialBatch {
-    fn end_offset(&self) -> usize {
-        self.start_offset + bytes_to_chunks(self.data.len())
-    }
-}
-
-impl EntryBatch {
-    fn get_data(&self, offset: usize, length: usize) -> Option<Vec<u8>> {
-        match self {
-            EntryBatch::Complete(data) => data
-                .get(offset * ENTRY_SIZE..(offset + length) * ENTRY_SIZE)
-                .map(|s| s.to_vec()),
-            EntryBatch::Incomplete(data_list) => {
-                for p in data_list {
-                    if offset >= p.start_offset
-                        && offset + length <= p.start_offset + bytes_to_chunks(p.data.len())
-                    {
-                        return p
-                            .data
-                            .get(
-                                (offset - p.start_offset) * ENTRY_SIZE
-                                    ..(offset - p.start_offset + length) * ENTRY_SIZE,
-                            )
-                            .map(|s| s.to_vec());
-                    }
-                }
-                None
-            }
-        }
-    }
-
-    /// Return `Error` if the new data overlaps with old data.
-    /// Convert `Incomplete` to `Completed` if the chunk is completed after the insertion.
-    fn insert_data(&mut self, offset: usize, mut data: Vec<u8>) -> Result<()> {
-        match self {
-            EntryBatch::Complete(_) => {
-                bail!("overwriting a completed PoRA Chunk with partial data");
-            }
-            EntryBatch::Incomplete(list) => {
-                let data_entry_len = bytes_to_chunks(data.len());
-                match list.binary_search_by_key(&offset, |p| p.start_offset) {
-                    Ok(i) => {
-                        bail!(
-                            "same offset with a PartialBatch at index {}: offset={}",
-                            i,
-                            offset
-                        );
-                    }
-                    Err(position) => {
-                        if position != 0 && offset < list[position - 1].end_offset() {
-                            bail!(
-                                "Overlap with index {}: end_offset={} new_offset={}",
-                                position - 1,
-                                list[position - 1].end_offset(),
-                                offset
-                            );
-                        }
-                        if position != list.len()
-                            && offset + data_entry_len > list[position].start_offset
-                        {
-                            bail!(
-                                "Overlap with index{}: start_offset={} new_end_offset={}",
-                                position,
-                                list[position].start_offset,
-                                offset + data_entry_len
-                            );
-                        }
-                        let merge_prev = position != 0 && offset == list[position - 1].end_offset();
-                        let merge_next = position != list.len()
-                            && offset + data_entry_len == list[position].start_offset;
-                        match (merge_prev, merge_next) {
-                            (false, false) => {
-                                list.insert(
-                                    position,
-                                    PartialBatch {
-                                        start_offset: offset,
-                                        data,
-                                    },
-                                );
-                            }
-                            (true, false) => {
-                                list[position - 1].data.append(&mut data);
-                            }
-                            (false, true) => {
-                                data.append(&mut list[position].data);
-                                list[position] = PartialBatch {
-                                    start_offset: offset,
-                                    data,
-                                };
-                            }
-                            (true, true) => {
-                                // Merge the new data with the two around partial batches to
-                                // a single one.
-                                list[position - 1].data.append(&mut data);
-                                let mut next = list.remove(position);
-                                list[position - 1].data.append(&mut next.data);
-                            }
-                        }
-                        // TODO(zz): Use config here?
-                        if list.len() == 1
-                            && list[0].start_offset == 0
-                            && bytes_to_chunks(list[0].data.len()) == PORA_CHUNK_SIZE
-                        {
-                            // All data in this batch have been filled.
-                            *self = EntryBatch::Complete(list.remove(0).data);
-                        }
-                        Ok(())
-                    }
-                }
-            }
-        }
-    }
-
-    fn truncate(&mut self, start_offset: usize) {
-        assert!(start_offset > 0 && start_offset < PORA_CHUNK_SIZE);
-        match self {
-            EntryBatch::Complete(data) => {
-                data.truncate(start_offset);
-            }
-            EntryBatch::Incomplete(batch_list) => {
-                let mut start_partial_batch_index = None;
-                for (i, b) in batch_list.iter_mut().enumerate() {
-                    if b.start_offset >= start_offset {
-                        // All partial chunks after (including) i should be removed;
-                        start_partial_batch_index = Some(i);
-                        break;
-                    } else if b.start_offset + bytes_to_chunks(b.data.len()) > start_offset {
-                        start_partial_batch_index = Some(i + 1);
-                        b.data
-                            .truncate((start_offset - b.start_offset) * ENTRY_SIZE);
-                        break;
-                    }
-                }
-                if let Some(start_index) = start_partial_batch_index {
-                    batch_list.truncate(start_index);
-                }
-            }
-        }
-    }
 }
 
 /// Return the batch boundaries `(batch_start_index, batch_end_index)` given the index range.

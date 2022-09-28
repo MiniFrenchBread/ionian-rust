@@ -32,7 +32,8 @@ pub const COL_TX_DATA_ROOT_INDEX: u32 = 2;
 pub const COL_ENTRY_BATCH_ROOT: u32 = 3;
 pub const COL_TX_COMPLETED: u32 = 4;
 pub const COL_MISC: u32 = 5;
-pub const COL_NUM: u32 = 6;
+pub const COL_SEAL_CONTEXT: u32 = 6;
+pub const COL_NUM: u32 = 7;
 
 type Merkle = AppendMerkleTree<H256, Sha3Algorithm>;
 

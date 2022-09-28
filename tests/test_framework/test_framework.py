@@ -151,9 +151,6 @@ class TestFramework:
         for node in self.nodes:
             node.wait_for_rpc_connection()
 
-        for node in self.nodes:
-            wait_until(lambda: node.ionian_get_status() == self.num_nodes - 1)
-
     def __parse_arguments(self):
         parser = argparse.ArgumentParser(usage="%(prog)s [options]")
 

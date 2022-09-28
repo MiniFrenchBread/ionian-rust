@@ -6,6 +6,7 @@ use shared_types::{
 use crate::error::Result;
 
 mod flow_store;
+mod load_chunk;
 pub mod log_manager;
 #[cfg(test)]
 mod tests;

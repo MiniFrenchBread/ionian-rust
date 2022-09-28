@@ -171,7 +171,7 @@ impl ClientBuilder {
     }
 
     /// Starts the networking stack.
-    pub fn with_router(mut self) -> Result<Self, String> {
+    pub fn with_router(mut self, router_config: router::Config) -> Result<Self, String> {
         let executor = require!("router", self, runtime_context).clone().executor;
         let sync_send = require!("router", self, sync).send.clone(); // note: we can make this optional in the future
         let miner_send = self.miner.as_ref().map(|x| x.send.clone());
@@ -196,6 +196,7 @@ impl ClientBuilder {
             store,
             file_location_cache,
             network.keypair.clone(),
+            router_config,
         );
 
         Ok(self)

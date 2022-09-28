@@ -95,9 +95,9 @@ impl RouterService {
         store: Arc<RwLock<dyn LogStore>>,
         file_location_cache: Arc<FileLocationCache>,
         local_keypair: Keypair,
+        config: Config,
     ) {
         let store = Store::new(store, executor.clone());
-        let config = Config::default();
 
         // create the network service and spawn the task
         let router = RouterService {
@@ -265,6 +265,21 @@ impl RouterService {
                 self.libp2p.respond_with_error(peer_id, id, error, reason);
             }
             NetworkMessage::Publish { messages } => {
+                if self.libp2p.swarm.connected_peers().next().is_none() {
+                    // this is a boardcast message, when current node doesn't have any peers connected, try to connect any peer in config
+                    for multiaddr in &self.config.libp2p_nodes {
+                        match Swarm::dial(&mut self.libp2p.swarm, multiaddr.clone()) {
+                            Ok(()) => {
+                                debug!(address = %multiaddr, "Dialing libp2p peer");
+                                break;
+                            }
+                            Err(err) => {
+                                debug!(address = %multiaddr, error = ?err, "Could not connect to peer")
+                            }
+                        };
+                    }
+                }
+
                 let mut topic_kinds = Vec::new();
                 for message in &messages {
                     if !topic_kinds.contains(&message.kind()) {
