@@ -195,10 +195,10 @@ fn submission_event_to_transaction(e: SubmissionFilter) -> LogFetchProgress {
     LogFetchProgress::Transaction(Transaction {
         stream_ids: vec![],
         data: vec![],
-        data_merkle_root: nodes_to_root(&e.submission.1),
+        data_merkle_root: nodes_to_root(&e.submission.2),
         merkle_nodes: e
             .submission
-            .1
+            .2
             .iter()
             // the submission height is the height of the root node starting from height 0.
             .map(|(root, height)| (height.as_usize() + 1, root.into()))

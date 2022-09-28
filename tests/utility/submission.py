@@ -34,6 +34,7 @@ def bytes_to_entries(size_bytes):
 def create_submission(data):
     submission = []
     submission.append(len(data))
+    submission.append("")
     submission.append([])
 
     offset = 0
@@ -43,7 +44,7 @@ def create_submission(data):
         nodes.append(node_hash)
 
         height = int(log2(chunks))
-        submission[1].append([add_0x_prefix(node_hash.decode("utf-8")), height])
+        submission[2].append([add_0x_prefix(node_hash.decode("utf-8")), height])
         offset += chunks * ENTRY_SIZE
 
     root_hash = nodes[-1]
