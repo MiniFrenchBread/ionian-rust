@@ -6,7 +6,7 @@ use crate::log_store::{
 };
 use crate::{try_option, IonianKeyValueDB};
 use anyhow::{anyhow, bail, Result};
-use append_merkle::{Algorithm, AppendMerkleTree, Sha3Algorithm};
+use append_merkle::{Algorithm, AppendMerkleTree, MerkleTreeRead, Sha3Algorithm};
 use ethereum_types::H256;
 use kvdb_rocksdb::{Database, DatabaseConfig};
 use merkle_light::merkle::{log2_pow2, MerkleTree};
@@ -229,8 +229,8 @@ impl LogStoreRead for LogManager {
         let tx = try_option!(self.tx_store.get_tx_by_seq_number(tx_seq)?);
         let chunks =
             try_option!(self.get_chunks_by_tx_and_index_range(tx_seq, index_start, index_end)?);
-        let left_proof = self.gen_proof(tx.start_entry_index + index_start as u64)?;
-        let right_proof = self.gen_proof(tx.start_entry_index + index_end as u64 - 1)?;
+        let left_proof = self.gen_proof(tx.start_entry_index + index_start as u64, None)?;
+        let right_proof = self.gen_proof(tx.start_entry_index + index_end as u64 - 1, None)?;
         Ok(Some(ChunkArrayWithProof {
             chunks,
             proof: FlowRangeProof {
@@ -264,13 +264,14 @@ impl LogStoreRead for LogManager {
         self.tx_store.next_tx_seq()
     }
 
-    fn get_proof_for_flow_index_range(
+    fn get_proof_at_root(
         &self,
+        root: &DataRoot,
         index: u64,
         length: u64,
     ) -> crate::error::Result<FlowRangeProof> {
-        let left_proof = self.gen_proof(index)?;
-        let right_proof = self.gen_proof(index + length - 1)?;
+        let left_proof = self.gen_proof(index, Some(*root))?;
+        let right_proof = self.gen_proof(index + length - 1, Some(*root))?;
         Ok(FlowRangeProof {
             left_proof,
             right_proof,
@@ -357,17 +358,27 @@ impl LogManager {
         }
     }
 
-    fn gen_proof(&self, flow_index: u64) -> Result<FlowProof> {
+    fn gen_proof(&self, flow_index: u64, maybe_root: Option<DataRoot>) -> Result<FlowProof> {
         let chunk_index = flow_index / PORA_CHUNK_SIZE as u64;
-        let top_proof = self.pora_chunks_merkle.gen_proof(chunk_index as usize)?;
+        let top_proof = match maybe_root {
+            None => self.pora_chunks_merkle.gen_proof(chunk_index as usize)?,
+            Some(root) => self
+                .pora_chunks_merkle
+                .at_root_version(&root)?
+                .gen_proof(chunk_index as usize)?,
+        };
 
         // TODO(zz): Maybe we can decide that all proofs are at the PoRA chunk level, so
         // we do not need to maintain the proof at the entry level below.
         // Condition (self.last_chunk_merkle.leaves() == 0): When last chunk size is exactly PORA_CHUNK_SIZE, proof should be generated from flow data, as last_chunk_merkle.leaves() is zero at this time
+        // TODO(zz): In the current use cases, `maybe_root` is only `Some` for mining
+        // and `flow_index` must be within a complete PoRA chunk. For possible future usages,
+        // we'll need to find the flow length at the given root and load a partial chunk
+        // if `flow_index` is in the last chunk.
         let sub_proof = if chunk_index as usize != self.pora_chunks_merkle.leaves() - 1
             || self.last_chunk_merkle.leaves() == 0
         {
-            // FIXME(zz）: Even if the data is incomplete, given the intermediate merkle roots
+            // TODO(zz）: Even if the data is incomplete, given the intermediate merkle roots
             // it's still possible to generate needed proofs. These merkle roots may be stored
             // within `EntryBatch::Incomplete`.
             let pora_chunk = self
@@ -395,8 +406,15 @@ impl LogManager {
             let chunk_merkle = Merkle::new_with_depth(leaves, log2_pow2(PORA_CHUNK_SIZE) + 1, None);
             chunk_merkle.gen_proof(flow_index as usize % PORA_CHUNK_SIZE)?
         } else {
-            self.last_chunk_merkle
-                .gen_proof(flow_index as usize % PORA_CHUNK_SIZE)?
+            match maybe_root {
+                None => self
+                    .last_chunk_merkle
+                    .gen_proof(flow_index as usize % PORA_CHUNK_SIZE)?,
+                Some(root) => self
+                    .last_chunk_merkle
+                    .at_root_version(&root)?
+                    .gen_proof(flow_index as usize % PORA_CHUNK_SIZE)?,
+            }
         };
         entry_proof(&top_proof, &sub_proof)
     }
@@ -608,6 +626,7 @@ impl LogManager {
             self.last_chunk_merkle.revert_to(tx_seq)?;
         } else {
             // We are reverting to a position before the current last_chunk.
+            // FIXME(zz): Fill leaves with known data.
             self.last_chunk_merkle = self
                 .tx_store
                 .rebuild_last_chunk_merkle(self.pora_chunks_merkle.leaves() - 1, tx_seq)?;

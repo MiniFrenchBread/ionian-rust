@@ -3,7 +3,7 @@ use crate::log_store::log_manager::{
 };
 
 use anyhow::{bail, Result};
-use append_merkle::{AppendMerkleTree, Sha3Algorithm};
+use append_merkle::{AppendMerkleTree, MerkleTreeRead, Sha3Algorithm};
 use ethereum_types::H256;
 use shared_types::{bytes_to_chunks, ChunkArray};
 use ssz::{Decode, DecodeError, Encode};

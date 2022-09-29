@@ -44,7 +44,8 @@ pub trait LogStoreRead: LogStoreChunkRead {
 
     fn validate_range_proof(&self, tx_seq: u64, data: &ChunkArrayWithProof) -> Result<bool>;
 
-    fn get_proof_for_flow_index_range(&self, index: u64, length: u64) -> Result<FlowRangeProof>;
+    fn get_proof_at_root(&self, root: &DataRoot, index: u64, length: u64)
+        -> Result<FlowRangeProof>;
 
     /// Return flow root and length.
     fn get_context(&self) -> Result<(DataRoot, u64)>;

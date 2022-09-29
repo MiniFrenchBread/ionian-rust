@@ -87,15 +87,23 @@ impl LogSyncManager {
                                 }
                             }
                         };
+                    let latest_block_number = log_sync_manager
+                        .log_fetcher
+                        .provider()
+                        .get_block_number()
+                        .await?
+                        .as_u64();
 
                     // Start watching before recovery to ensure that no log is skipped.
                     // TODO(zz): Rate limit to avoid OOM during recovery.
                     let watch_rx = log_sync_manager
                         .log_fetcher
-                        .start_watch(start_block_number, &executor_clone);
-                    let recover_rx = log_sync_manager
-                        .log_fetcher
-                        .start_recover(start_block_number, &executor_clone);
+                        .start_watch(latest_block_number, &executor_clone);
+                    let recover_rx = log_sync_manager.log_fetcher.start_recover(
+                        start_block_number,
+                        latest_block_number,
+                        &executor_clone,
+                    );
                     log_sync_manager.handle_data(recover_rx).await?;
                     // Syncing `watch_rx` is supposed to block forever.
                     log_sync_manager.handle_data(watch_rx).await?;
@@ -113,6 +121,18 @@ impl LogSyncManager {
             Ordering::Less => {
                 // FIXME(zz): Handle reorg after restart.
                 debug!("revert for chain reorg: seq={}", tx.seq);
+                match self.store.read().await.get_tx_by_seq_number(tx.seq) {
+                    Ok(Some(old_tx)) => {
+                        if tx == old_tx {
+                            // The reverted result is the same, so just ignore.
+                            return true;
+                        }
+                    }
+                    e => {
+                        error!("get old tx error: tx_seq={} e={:?}", tx.seq, e);
+                        return false;
+                    }
+                }
                 // TODO(zz): `wrapping_sub` here is a hack to handle the case of tx_seq=0.
                 if let Err(e) = self.store.write().await.revert_to(tx.seq.wrapping_sub(1)) {
                     error!("revert_to fails: e={:?}", e);

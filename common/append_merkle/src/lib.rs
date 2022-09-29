@@ -1,17 +1,14 @@
+mod merkle_tree;
 mod proof;
 mod sha3;
 
 use anyhow::{anyhow, bail, Result};
-use ethereum_types::H256;
-use lazy_static::lazy_static;
-use ssz::{Decode, Encode};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::marker::PhantomData;
-use tracing::trace;
 
+pub use crate::merkle_tree::{Algorithm, HashElement, MerkleTreeRead};
 pub use proof::{Proof, RangeProof};
 pub use sha3::Sha3Algorithm;
 
@@ -20,8 +17,8 @@ pub struct AppendMerkleTree<E: HashElement, A: Algorithm<E>> {
     layers: Vec<Vec<E>>,
     /// Keep the delta nodes that can be used to construct a history tree.
     /// The key is the root node of that version.
-    delta_nodes_map: HashMap<E, DeltaNodes<E>>,
-    tx_seq_to_root_map: HashMap<u64, E>,
+    delta_nodes_map: HashMap<u64, DeltaNodes<E>>,
+    root_to_tx_seq_map: HashMap<E, u64>,
 
     /// For `last_chunk_merkle` after the first chunk, this is set to `Some(10)` so that
     /// `revert_to` can reset the state correctly when needed.
@@ -37,14 +34,19 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
         let mut merkle = Self {
             layers: vec![leaves],
             delta_nodes_map: HashMap::new(),
-            tx_seq_to_root_map: HashMap::new(),
+            root_to_tx_seq_map: HashMap::new(),
             min_depth: None,
             leaf_height,
             _a: Default::default(),
         };
         if merkle.leaves() == 0 {
             if let Some(seq) = start_tx_seq {
-                merkle.tx_seq_to_root_map.insert(seq, E::null());
+                merkle.delta_nodes_map.insert(
+                    seq,
+                    DeltaNodes {
+                        right_most_nodes: vec![],
+                    },
+                );
             }
             return merkle;
         }
@@ -64,14 +66,19 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
         let mut merkle = Self {
             layers: vec![vec![]],
             delta_nodes_map: HashMap::new(),
-            tx_seq_to_root_map: HashMap::new(),
+            root_to_tx_seq_map: HashMap::new(),
             min_depth: None,
             leaf_height,
             _a: Default::default(),
         };
         if subtree_root_list.is_empty() {
             if let Some(seq) = start_tx_seq {
-                merkle.tx_seq_to_root_map.insert(seq, E::null());
+                merkle.delta_nodes_map.insert(
+                    seq,
+                    DeltaNodes {
+                        right_most_nodes: vec![],
+                    },
+                );
             }
             return Ok(merkle);
         }
@@ -87,13 +94,18 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
             let mut merkle = Self {
                 layers: vec![vec![]; depth],
                 delta_nodes_map: HashMap::new(),
-                tx_seq_to_root_map: HashMap::new(),
+                root_to_tx_seq_map: HashMap::new(),
                 min_depth: Some(depth),
                 leaf_height: 0,
                 _a: Default::default(),
             };
             if let Some(seq) = start_tx_seq {
-                merkle.tx_seq_to_root_map.insert(seq, E::null());
+                merkle.delta_nodes_map.insert(
+                    seq,
+                    DeltaNodes {
+                        right_most_nodes: vec![],
+                    },
+                );
             }
             merkle
         } else {
@@ -102,7 +114,7 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
             let mut merkle = Self {
                 layers,
                 delta_nodes_map: HashMap::new(),
-                tx_seq_to_root_map: HashMap::new(),
+                root_to_tx_seq_map: HashMap::new(),
                 min_depth: Some(depth),
                 leaf_height: 0,
                 _a: Default::default(),
@@ -113,15 +125,6 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
             merkle.commit(start_tx_seq);
             merkle
         }
-    }
-
-    pub fn leaves(&self) -> usize {
-        self.layers[0].len()
-    }
-
-    /// TODO: Calling this on an empty tree will panic. Is this needed?
-    pub fn root(&self) -> &E {
-        self.layers.last().unwrap().last().unwrap()
     }
 
     /// Return the new merkle root.
@@ -181,52 +184,6 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
         }
     }
 
-    pub fn gen_proof(&self, leaf_index: usize) -> Result<Proof<E>> {
-        if leaf_index >= self.leaves() {
-            bail!(
-                "leaf index out of bound: leaf_index={} total_leaves={}",
-                leaf_index,
-                self.leaves()
-            );
-        }
-        if self.layers[0][leaf_index] == E::null() {
-            bail!("Not ready to generate proof for leaf_index={}", leaf_index);
-        }
-        if self.layers.len() == 1 {
-            return Ok(Proof::new(
-                vec![self.root().clone(), self.root().clone()],
-                vec![],
-            ));
-        }
-        let mut lemma: Vec<E> = Vec::with_capacity(self.layers.len()); // path + root
-        let mut path: Vec<bool> = Vec::with_capacity(self.layers.len() - 2); // path - 1
-        let mut index_in_layer = leaf_index;
-        lemma.push(self.layers[0][leaf_index].clone());
-        for height in 0..(self.layers.len() - 1) {
-            trace!(
-                "gen_proof: height={} index={} hash={:?}",
-                height,
-                index_in_layer,
-                self.layers[height][index_in_layer]
-            );
-            if index_in_layer % 2 == 0 {
-                path.push(true);
-                if index_in_layer + 1 == self.layers[height].len() {
-                    // TODO: This can be skipped if the tree size is available in validation.
-                    lemma.push(E::end_pad(height + self.leaf_height));
-                } else {
-                    lemma.push(self.layers[height][index_in_layer + 1].clone());
-                }
-            } else {
-                path.push(false);
-                lemma.push(self.layers[height][index_in_layer - 1].clone());
-            }
-            index_in_layer >>= 1;
-        }
-        lemma.push(self.root().clone());
-        Ok(Proof::new(lemma, path))
-    }
-
     pub fn gen_range_proof(&self, start_index: usize, end_index: usize) -> Result<RangeProof<E>> {
         if end_index <= start_index {
             bail!(
@@ -245,7 +202,7 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
     }
 
     pub fn check_root(&self, root: &E) -> bool {
-        self.delta_nodes_map.contains_key(root)
+        self.root_to_tx_seq_map.contains_key(root)
     }
 
     pub fn leaf_at(&self, position: usize) -> Result<Option<E>> {
@@ -267,7 +224,12 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
             if self.leaves() == 0 {
                 // The state is empty, so we just save the root as `null`.
                 // Note that this root should not be used.
-                self.tx_seq_to_root_map.insert(tx_seq, E::null());
+                self.delta_nodes_map.insert(
+                    tx_seq,
+                    DeltaNodes {
+                        right_most_nodes: vec![],
+                    },
+                );
                 return;
             }
             let mut right_most_nodes = Vec::new();
@@ -277,8 +239,8 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
             let root = self.root().clone();
             assert_eq!(root, right_most_nodes.last().unwrap().1);
             self.delta_nodes_map
-                .insert(root.clone(), DeltaNodes::new(right_most_nodes));
-            self.tx_seq_to_root_map.insert(tx_seq, root);
+                .insert(tx_seq, DeltaNodes::new(right_most_nodes));
+            self.root_to_tx_seq_map.insert(root, tx_seq);
         }
     }
 
@@ -403,7 +365,7 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
     #[cfg(test)]
     pub fn validate(&self, proof: &Proof<E>, leaf: &E, position: usize) -> Result<bool> {
         proof.validate::<A>(leaf, position)?;
-        Ok(self.delta_nodes_map.contains_key(&proof.root()))
+        Ok(self.root_to_tx_seq_map.contains_key(&proof.root()))
     }
 
     pub fn revert_to(&mut self, tx_seq: u64) -> Result<()> {
@@ -411,20 +373,10 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
             // Any previous state of an empty tree is always empty.
             return Ok(());
         }
-        let old_root = self
-            .tx_seq_to_root_map
-            .get(&tx_seq)
-            .ok_or_else(|| anyhow!("tx seq unavailable, seq={}", tx_seq))?;
-        if *old_root == E::null() {
-            // This is the special case to revert an empty state.
-            self.reset();
-            self.clear_after(tx_seq);
-            return Ok(());
-        }
         let delta_nodes = self
             .delta_nodes_map
-            .get(old_root)
-            .ok_or_else(|| anyhow!("old root unavailable, root={:?}", old_root))?;
+            .get(&tx_seq)
+            .ok_or_else(|| anyhow!("tx_seq unavailable, root={:?}", tx_seq))?;
         // Dropping the upper layers that are not in the old merkle tree.
         self.layers.truncate(delta_nodes.right_most_nodes.len());
         for (height, (last_index, right_most_node)) in
@@ -437,6 +389,25 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
         Ok(())
     }
 
+    pub fn at_root_version(&self, root_hash: &E) -> Result<HistoryTree<E>> {
+        let tx_seq = self
+            .root_to_tx_seq_map
+            .get(root_hash)
+            .ok_or_else(|| anyhow!("old root unavailable, root={:?}", root_hash))?;
+        let delta_nodes = self
+            .delta_nodes_map
+            .get(tx_seq)
+            .ok_or_else(|| anyhow!("tx_seq unavailable, tx_seq={:?}", tx_seq))?;
+        if delta_nodes.height() == 0 {
+            bail!("empty tree");
+        }
+        Ok(HistoryTree {
+            layers: &self.layers,
+            delta_nodes,
+            leaf_height: self.leaf_height,
+        })
+    }
+
     pub fn reset(&mut self) {
         self.layers = match self.min_depth {
             None => vec![vec![]],
@@ -446,9 +417,11 @@ impl<E: HashElement, A: Algorithm<E>> AppendMerkleTree<E, A> {
 
     fn clear_after(&mut self, tx_seq: u64) {
         let mut tx_seq = tx_seq + 1;
-        while self.tx_seq_to_root_map.contains_key(&tx_seq) {
-            if let Some(root) = self.tx_seq_to_root_map.remove(&tx_seq) {
-                self.delta_nodes_map.remove(&root);
+        while self.delta_nodes_map.contains_key(&tx_seq) {
+            if let Some(nodes) = self.delta_nodes_map.remove(&tx_seq) {
+                if nodes.height() != 0 {
+                    self.root_to_tx_seq_map.remove(nodes.root());
+                }
             }
             tx_seq += 1;
         }
@@ -466,65 +439,79 @@ impl<E: HashElement> DeltaNodes<E> {
         Self { right_most_nodes }
     }
 
-    #[allow(unused)]
-    fn get(&self, depth: usize, position: usize) -> Result<Option<E>> {
-        if depth >= self.right_most_nodes.len() || position > self.right_most_nodes[depth].0 {
+    fn get(&self, height: usize, position: usize) -> Result<Option<&E>> {
+        if height >= self.right_most_nodes.len() || position > self.right_most_nodes[height].0 {
             Err(anyhow!("position out of tree range"))
-        } else if position == self.right_most_nodes[depth].0 {
-            Ok(Some(self.right_most_nodes[depth].1.clone()))
+        } else if position == self.right_most_nodes[height].0 {
+            Ok(Some(&self.right_most_nodes[height].1))
         } else {
             Ok(None)
         }
     }
+
+    fn layer_len(&self, height: usize) -> usize {
+        self.right_most_nodes[height].0 + 1
+    }
+
+    fn height(&self) -> usize {
+        self.right_most_nodes.len()
+    }
+
+    fn root(&self) -> &E {
+        &self.right_most_nodes.last().unwrap().1
+    }
 }
 
-#[allow(unused)]
-struct HistoryTree<'m, E: HashElement> {
+pub struct HistoryTree<'m, E: HashElement> {
     /// A reference to the global tree nodes.
     layers: &'m Vec<Vec<E>>,
     /// The delta nodes that are difference from `layers`.
     /// This could be a reference, we just take ownership for convenience.
-    delta_nodes: DeltaNodes<E>,
+    delta_nodes: &'m DeltaNodes<E>,
+
+    leaf_height: usize,
 }
 
-pub trait HashElement:
-    Clone + Debug + Eq + Hash + AsRef<[u8]> + AsMut<[u8]> + Decode + Encode + Send + Sync
-{
-    fn end_pad(height: usize) -> Self;
-    fn null() -> Self;
-    fn is_null(&self) -> bool {
-        self == &Self::null()
+impl<E: HashElement, A: Algorithm<E>> MerkleTreeRead for AppendMerkleTree<E, A> {
+    type E = E;
+
+    fn node(&self, layer: usize, index: usize) -> &Self::E {
+        &self.layers[layer][index]
+    }
+
+    fn height(&self) -> usize {
+        self.layers.len()
+    }
+
+    fn layer_len(&self, layer_height: usize) -> usize {
+        self.layers[layer_height].len()
+    }
+
+    fn padding_node(&self, height: usize) -> Self::E {
+        E::end_pad(height + self.leaf_height)
     }
 }
 
-impl HashElement for H256 {
-    fn end_pad(height: usize) -> Self {
-        ZERO_HASHES[height]
-    }
-
-    fn null() -> Self {
-        H256::repeat_byte(1)
-    }
-}
-
-lazy_static! {
-    static ref ZERO_HASHES: [H256; 64] = {
-        let leaf_zero_hash: H256 = Sha3Algorithm::leaf(&[0u8; 256]);
-        let mut list = [H256::zero(); 64];
-        list[0] = leaf_zero_hash;
-        for i in 1..list.len() {
-            list[i] = Sha3Algorithm::parent(&list[i - 1], &list[i - 1]);
+impl<'a, E: HashElement> MerkleTreeRead for HistoryTree<'a, E> {
+    type E = E;
+    fn node(&self, layer: usize, index: usize) -> &Self::E {
+        match self.delta_nodes.get(layer, index).expect("range checked") {
+            Some(node) => node,
+            None => &self.layers[layer][index],
         }
-        list
-    };
-}
-
-pub trait Algorithm<E: HashElement> {
-    fn parent(left: &E, right: &E) -> E;
-    fn parent_single(r: &E, height: usize) -> E {
-        Self::parent(r, &E::end_pad(height))
     }
-    fn leaf(data: &[u8]) -> E;
+
+    fn height(&self) -> usize {
+        self.delta_nodes.height()
+    }
+
+    fn layer_len(&self, layer_height: usize) -> usize {
+        self.delta_nodes.layer_len(layer_height)
+    }
+
+    fn padding_node(&self, height: usize) -> Self::E {
+        E::end_pad(height + self.leaf_height)
+    }
 }
 
 #[macro_export]
@@ -547,6 +534,7 @@ macro_rules! ensure_eq {
 
 #[cfg(test)]
 mod tests {
+    use crate::merkle_tree::MerkleTreeRead;
     use crate::sha3::Sha3Algorithm;
     use crate::AppendMerkleTree;
     use ethereum_types::H256;

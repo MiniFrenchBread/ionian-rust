@@ -35,6 +35,7 @@ impl LogEntryFetcher {
     pub fn start_recover(
         &self,
         start_block_number: u64,
+        end_block_number: u64,
         executor: &TaskExecutor,
     ) -> UnboundedReceiver<LogFetchProgress> {
         let provider = self.provider.clone();
@@ -44,7 +45,11 @@ impl LogEntryFetcher {
         executor.spawn(
             async move {
                 let mut progress = start_block_number;
-                let mut filter = contract.submission_filter().from_block(progress).filter;
+                let mut filter = contract
+                    .submission_filter()
+                    .from_block(progress)
+                    .to_block(end_block_number)
+                    .filter;
                 let mut stream = provider.get_logs_paginated(&filter, LOG_PAGE_SIZE);
                 debug!("start_recover starts, start={}", start_block_number);
                 while let Some(maybe_log) = stream.next().await {

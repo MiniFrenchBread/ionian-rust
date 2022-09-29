@@ -3,7 +3,7 @@ use crate::log_store::log_manager::{
     PORA_CHUNK_SIZE,
 };
 use crate::log_store::{LogStoreChunkRead, LogStoreChunkWrite, LogStoreRead, LogStoreWrite};
-use append_merkle::{Algorithm, AppendMerkleTree, Sha3Algorithm};
+use append_merkle::{Algorithm, AppendMerkleTree, MerkleTreeRead, Sha3Algorithm};
 use ethereum_types::H256;
 use rand::random;
 use shared_types::{compute_padded_chunk_size, ChunkArray, Transaction, CHUNK_SIZE};

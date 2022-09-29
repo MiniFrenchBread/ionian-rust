@@ -1,11 +1,11 @@
 use crate::error::Error;
 use crate::log_store::log_manager::{
-    sub_merkle_tree, COL_MISC, COL_TX, COL_TX_COMPLETED, COL_TX_DATA_ROOT_INDEX, ENTRY_SIZE,
-    PORA_CHUNK_SIZE,
+    data_to_merkle_leaves, sub_merkle_tree, COL_MISC, COL_TX, COL_TX_COMPLETED,
+    COL_TX_DATA_ROOT_INDEX, ENTRY_SIZE, PORA_CHUNK_SIZE,
 };
-use crate::{try_option, IonianKeyValueDB};
+use crate::{try_option, IonianKeyValueDB, LogManager};
 use anyhow::{anyhow, Result};
-use append_merkle::{AppendMerkleTree, Sha3Algorithm};
+use append_merkle::{AppendMerkleTree, MerkleTreeRead, Sha3Algorithm};
 use ethereum_types::H256;
 use merkle_light::merkle::log2_pow2;
 use shared_types::{DataRoot, Transaction};
@@ -185,6 +185,15 @@ impl TransactionStore {
             )
         };
         for (tx_seq, subtree_list) in tx_list.into_iter().rev() {
+            // Pad the tx. After the first subtree is padded, other subtrees should be aligned.
+            let first_subtree = 1 << (subtree_list[0].0 - 1);
+            if merkle.leaves() % first_subtree != 0 {
+                let pad_len =
+                    cmp::min(first_subtree, PORA_CHUNK_SIZE) - (merkle.leaves() % first_subtree);
+                merkle.append_list(data_to_merkle_leaves(&LogManager::padding(pad_len))?);
+            }
+            // Since we are building the last merkle with a given last tx_seq, it's ensured
+            // that appending subtrees will not go beyond the max size.
             merkle.append_subtree_list(subtree_list)?;
             merkle.commit(Some(tx_seq));
         }

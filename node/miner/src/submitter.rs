@@ -74,7 +74,11 @@ impl Submitter {
             .store
             .read()
             .await
-            .get_proof_for_flow_index_range(mine_answer.recall_position, SECTORS_PER_SEAL as u64)
+            .get_proof_at_root(
+                &mine_answer.context_flow_root,
+                mine_answer.recall_position,
+                SECTORS_PER_SEAL as u64,
+            )
             .map_err(|e| e.to_string())?;
 
         let answer = PoraAnswer {

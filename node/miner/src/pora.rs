@@ -47,6 +47,7 @@ pub(crate) struct Miner<'a> {
 #[derive(Debug)]
 pub struct AnswerWithoutProof {
     pub context_digest: H256,
+    pub context_flow_root: H256,
     pub nonce: H256,
     pub miner_id: H256,
     pub start_position: u64,
@@ -109,6 +110,7 @@ impl<'a> Miner<'a> {
                 }
                 return Some(AnswerWithoutProof {
                     context_digest: H256::from(self.context.digest),
+                    context_flow_root: self.context.flow_root.into(),
                     nonce,
                     miner_id: *self.miner_id,
                     start_position: self.start_position,

@@ -51,11 +51,13 @@ class MineTest(TestFramework):
         self.log.info("Wait for the second mine answer")
         wait_until(lambda: self.mine_contract.last_mined_epoch() == 2)
 
+        self.nodes[0].miner_stop()
+        self.log.info("Wait for the third mine context release")
+        wait_until(lambda: int(blockchain.eth_blockNumber(), 16) > 307, timeout=180)
         self.log.info("Submit the second data chunk")
         self.submit_data(b"\x22", 2000)
-
-        self.log.info("Wait for the third mine context release")
-        wait_until(lambda: int(blockchain.eth_blockNumber(), 16) > 300, timeout=180)
+        # Now the storage node should have the latest flow, but the mining context is using an old one.
+        self.nodes[0].miner_start()
 
         self.log.info("Wait for the third mine answer")
         wait_until(lambda: self.mine_contract.last_mined_epoch() == 3)
