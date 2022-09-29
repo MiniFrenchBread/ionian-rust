@@ -14,8 +14,5 @@ rpc_listen_address = "127.0.0.1:5678"
 
 log_config_file = "log_config"
 
-blockchain_rpc_endpoint = "https://quick-yolo-sea.bsc-testnet.discover.quiknode.pro/18caa1c44c4bade5666709ae208a6bd86cd66327/"
-log_contract_address = "0x03D2079a54b71b5DE42d346E16ef58Af72C67D2A"
-log_sync_start_block_number = 23231699
-
-mine_contract_address = "0x667F6E51F72217eb18a5141264434e388e4D3854"
+blockchain_rpc_endpoint = ""
+log_contract_address = ""
