@@ -19,14 +19,16 @@ build_config! {
     (blockchain_rpc_endpoint, (String), "http://127.0.0.1:8545".to_string())
     (log_contract_address, (String), "".to_string())
     (log_sync_start_block_number, (u64), 0)
+    (confirmation_block_count, (u64), 500)
 
     // rpc
     (rpc_enabled, (bool), true)
     (rpc_listen_address, (String), "127.0.0.1:5678".to_string())
     (rpc_chunks_per_segment, (usize), 1024)
+    (rpc_max_cache_file_size, (usize), 10*1024*1024) //10MB
 
     // chunk pool
-    (chunk_pool_window_size, (usize), 4)
+    (chunk_pool_write_window_size, (usize), 4)
     (chunk_pool_max_cached_chunks_all, (usize), 4*1024*1024)    // 1G
     (chunk_pool_max_writings, (usize), 16)
     (chunk_pool_expiration_time_secs, (u64), 300)   // 5 minutes

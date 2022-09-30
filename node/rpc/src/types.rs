@@ -54,6 +54,8 @@ pub struct SegmentWithProof {
     pub index: u32,
     /// File merkle proof whose leaf node is segment root.
     pub proof: FileProof,
+    /// File size
+    pub file_size: u64,
 }
 
 impl SegmentWithProof {
@@ -160,10 +162,10 @@ impl SegmentWithProof {
     }
 
     /// Validates the segment data size and proof.
-    pub fn validate(&self, file_size: usize, chunks_per_segment: usize) -> RpcResult<()> {
-        self.validate_data_size_and_index(file_size, chunks_per_segment)?;
+    pub fn validate(&self, chunks_per_segment: usize) -> RpcResult<()> {
+        self.validate_data_size_and_index(self.file_size as usize, chunks_per_segment)?;
 
-        let (chunks, _) = compute_padded_chunk_size(file_size);
+        let (chunks, _) = compute_padded_chunk_size(self.file_size as usize);
         let (segments_for_proof, last_segment_size) =
             compute_segment_size(chunks, chunks_per_segment);
 

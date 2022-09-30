@@ -346,16 +346,32 @@ impl LogManager {
             pora_chunks_merkle,
             last_chunk_merkle,
         };
-        log_manager.try_initialize();
+        log_manager.try_initialize()?;
         Ok(log_manager)
     }
 
-    fn try_initialize(&mut self) {
+    fn try_initialize(&mut self) -> Result<()> {
         if self.pora_chunks_merkle.leaves() == 0 && self.last_chunk_merkle.leaves() == 0 {
             self.last_chunk_merkle.append(H256::zero());
             self.pora_chunks_merkle
                 .update_last(*self.last_chunk_merkle.root());
+        } else if self.last_chunk_merkle.leaves() != 0 {
+            let last_chunk_start_index = self.last_chunk_start_index();
+            let last_chunk_data = self.flow_store.get_available_entries(
+                last_chunk_start_index,
+                last_chunk_start_index + PORA_CHUNK_SIZE as u64,
+            )?;
+            for e in last_chunk_data {
+                let start_index = e.start_index - last_chunk_start_index;
+                for i in 0..e.data.len() / ENTRY_SIZE {
+                    self.last_chunk_merkle.fill_leaf(
+                        i + start_index as usize,
+                        Sha3Algorithm::leaf(&e.data[i * ENTRY_SIZE..(i + 1) * ENTRY_SIZE]),
+                    );
+                }
+            }
         }
+        Ok(())
     }
 
     fn gen_proof(&self, flow_index: u64, maybe_root: Option<DataRoot>) -> Result<FlowProof> {
@@ -617,7 +633,7 @@ impl LogManager {
         if tx_seq == u64::MAX {
             self.pora_chunks_merkle.reset();
             self.last_chunk_merkle.reset();
-            self.try_initialize();
+            self.try_initialize()?;
             return Ok(());
         }
         let old_leaves = self.pora_chunks_merkle.leaves();
@@ -626,10 +642,10 @@ impl LogManager {
             self.last_chunk_merkle.revert_to(tx_seq)?;
         } else {
             // We are reverting to a position before the current last_chunk.
-            // FIXME(zz): Fill leaves with known data.
             self.last_chunk_merkle = self
                 .tx_store
                 .rebuild_last_chunk_merkle(self.pora_chunks_merkle.leaves() - 1, tx_seq)?;
+            self.try_initialize()?;
             assert_eq!(
                 Some(*self.last_chunk_merkle.root()),
                 self.pora_chunks_merkle

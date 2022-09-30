@@ -333,4 +333,20 @@ impl EntryBatch {
 
         Ok(Some(root))
     }
+
+    pub fn into_data_list(self, start_index: u64) -> Vec<ChunkArray> {
+        // TODO: unseal data
+        match self.data {
+            EntryBatchData::Complete(data) => {
+                vec![ChunkArray { data, start_index }]
+            }
+            EntryBatchData::Incomplete(batch_list) => batch_list
+                .into_iter()
+                .map(|b| ChunkArray {
+                    data: b.data,
+                    start_index: start_index + b.start_offset as u64,
+                })
+                .collect(),
+        }
+    }
 }

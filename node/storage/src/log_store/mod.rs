@@ -126,7 +126,14 @@ pub trait Store: LogStoreRead + LogStoreWrite + Configurable + Send + Sync + 'st
 impl<T: LogStoreRead + LogStoreWrite + Configurable + Send + Sync + 'static> Store for T {}
 
 pub trait FlowRead {
+    /// Return the entries in the given range. If some data are missing, `Ok(None)` is returned.
     fn get_entries(&self, index_start: u64, index_end: u64) -> Result<Option<ChunkArray>>;
+
+    /// Return the available entries in the given range.
+    /// The `ChunkArray` in the returned list are in order and they will not overlap or be adjacent.
+    ///
+    /// For simplicity, `index_start` and `index_end` must be at the batch boundaries.
+    fn get_available_entries(&self, index_start: u64, index_end: u64) -> Result<Vec<ChunkArray>>;
 
     fn get_chunk_root_list(&self) -> Result<Vec<(usize, DataRoot)>>;
 }

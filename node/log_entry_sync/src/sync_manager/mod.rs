@@ -3,7 +3,7 @@ use crate::sync_manager::log_entry_fetcher::{LogEntryFetcher, LogFetchProgress};
 use anyhow::{bail, Result};
 use ethers::prelude::Middleware;
 use futures::FutureExt;
-use jsonrpsee::tracing::{debug, error, trace};
+use jsonrpsee::tracing::{debug, error, trace, warn};
 use shared_types::Transaction;
 use std::cmp::Ordering;
 use std::fmt::Debug;
@@ -18,11 +18,9 @@ use tokio::sync::RwLock;
 const RETRY_WAIT_MS: u64 = 500;
 
 pub struct LogSyncManager {
-    #[allow(unused)]
     config: LogSyncConfig,
     log_fetcher: LogEntryFetcher,
     store: Arc<RwLock<dyn Store>>,
-
     next_tx_seq: u64,
 }
 
@@ -72,12 +70,15 @@ impl LogSyncManager {
                                         if b.hash == Some(block_hash) {
                                             block_number
                                         } else {
-                                            error!(
+                                            warn!(
                                                 "log sync progress check hash fails, \
                                             block_number={:?} expect={:?} get={:?}",
                                                 block_number, block_hash, b.hash
                                             );
-                                            bail!("log sync data mismatch");
+                                            // Assume the blocks before this are not reverted.
+                                            block_number.saturating_sub(
+                                                log_sync_manager.config.confirmation_block_count,
+                                            )
                                         }
                                     }
                                     e => {

@@ -6,12 +6,13 @@ mod mem_pool;
 
 pub use handler::ChunkPoolHandler;
 pub use mem_pool::MemoryChunkPool;
+pub use mem_pool::SegmentInfo;
 
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    pub window_size: usize,
+    pub write_window_size: usize,
     pub max_cached_chunks_all: usize,
     pub max_writings: usize,
     pub expiration_time_secs: u64,

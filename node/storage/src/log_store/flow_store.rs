@@ -80,6 +80,47 @@ impl FlowRead for FlowStore {
         }))
     }
 
+    fn get_available_entries(&self, index_start: u64, index_end: u64) -> Result<Vec<ChunkArray>> {
+        // Both `index_start` and `index_end` are at the batch boundaries, so we do not need
+        // to check if the data is within range when we process each batch.
+        if index_end <= index_start
+            || index_start % self.config.batch_size as u64 != 0
+            || index_end % self.config.batch_size as u64 != 0
+        {
+            bail!(
+                "invalid entry index: start={} end={}",
+                index_start,
+                index_end
+            );
+        }
+        let mut entry_list = Vec::<ChunkArray>::new();
+        for (start_entry_index, _) in batch_iter(index_start, index_end, self.config.batch_size) {
+            let chunk_index = start_entry_index / self.config.batch_size as u64;
+
+            if let Some(mut data_list) = self
+                .db
+                .get_entry_batch(chunk_index)?
+                .map(|b| b.into_data_list(start_entry_index))
+            {
+                if data_list.is_empty() {
+                    continue;
+                }
+                if let Some(last) = entry_list.last_mut() {
+                    if last.start_index + bytes_to_entries(last.data.len() as u64)
+                        == data_list[0].start_index
+                    {
+                        // Merge the first element with the previous one.
+                        last.data.append(&mut data_list.remove(0).data);
+                    }
+                }
+                for data in data_list {
+                    entry_list.push(data);
+                }
+            }
+        }
+        Ok(entry_list)
+    }
+
     /// Return the list of all stored chunk roots.
     fn get_chunk_root_list(&self) -> Result<Vec<(usize, DataRoot)>> {
         let mut chunk_roots = Vec::new();
