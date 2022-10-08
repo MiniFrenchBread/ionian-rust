@@ -62,6 +62,21 @@ impl TransactionStore {
         Ok(Some(tx))
     }
 
+    pub fn remove_tx_by_seq_number(&self, seq: u64) -> Result<Option<Transaction>> {
+        let tx = try_option!(self.get_tx_by_seq_number(seq)?);
+        let mut db_tx = self.kvdb.transaction();
+        db_tx.delete(COL_TX, &seq.to_be_bytes());
+        db_tx.delete(COL_TX_COMPLETED, &seq.to_be_bytes());
+        // We only remove tx when the blockchain reorgs.
+        // The data root is always mapped to the first tx with the data. If it's reverted, all
+        // data after it will also be reverted, so we should remove this index.
+        if try_option!(self.get_tx_seq_by_data_root(&tx.data_merkle_root)?) == seq {
+            db_tx.delete(COL_TX_DATA_ROOT_INDEX, tx.data_merkle_root.as_bytes());
+        }
+        self.kvdb.write(db_tx)?;
+        Ok(Some(tx))
+    }
+
     pub fn get_tx_seq_by_data_root(&self, data_root: &DataRoot) -> Result<Option<u64>> {
         let value = try_option!(self
             .kvdb

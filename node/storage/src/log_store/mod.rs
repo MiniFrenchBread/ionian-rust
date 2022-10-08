@@ -101,9 +101,8 @@ pub trait LogStoreWrite: LogStoreChunkWrite {
     /// Revert the log state to a given tx seq.
     /// This is needed when transactions are reverted because of chain reorg.
     ///
-    /// Note that in the current implementation this just reverts the merkle tree and relies on
-    /// inserting new transactions to overwrite the old tx data.
-    fn revert_to(&mut self, tx_seq: u64) -> Result<()>;
+    /// Reverted transactions are returned in order.
+    fn revert_to(&mut self, tx_seq: u64) -> Result<Vec<Transaction>>;
 }
 
 pub trait LogStoreChunkWrite {

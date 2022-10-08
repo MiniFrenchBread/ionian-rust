@@ -19,7 +19,7 @@ use shared_types::{
 };
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{debug, instrument, trace};
+use tracing::{debug, error, instrument, trace};
 
 /// 256 Bytes
 pub const ENTRY_SIZE: usize = 256;
@@ -120,13 +120,24 @@ impl LogStoreWrite for LogManager {
         self.tx_store.put_progress(progress)
     }
 
-    fn revert_to(&mut self, tx_seq: u64) -> Result<()> {
+    /// Return the reverted Transactions in order.
+    fn revert_to(&mut self, tx_seq: u64) -> Result<Vec<Transaction>> {
         self.revert_merkle_tree(tx_seq)?;
         let start_index = self.last_chunk_start_index() * PORA_CHUNK_SIZE as u64
             + self.last_chunk_merkle.leaves() as u64;
-        // TODO(zz): We should try to reorder these data based on the new tx seq
-        // instead of just deleting them, so the clients do not need to upload data again.
-        self.flow_store.truncate(start_index)
+        self.flow_store.truncate(start_index)?;
+        let mut transactions = Vec::new();
+        for seq in (tx_seq + 1)..self.next_tx_seq()? {
+            match self.tx_store.remove_tx_by_seq_number(seq)? {
+                None => {
+                    // All transactions are supposed to exist before we revert them.
+                    error!("reverted transactions missing after tx_seq={}", seq);
+                    break;
+                }
+                Some(tx) => transactions.push(tx),
+            }
+        }
+        Ok(transactions)
     }
 }
 

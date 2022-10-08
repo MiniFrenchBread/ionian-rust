@@ -1,10 +1,11 @@
 use crate::sync_manager::config::LogSyncConfig;
+use crate::sync_manager::data_cache::DataCache;
 use crate::sync_manager::log_entry_fetcher::{LogEntryFetcher, LogFetchProgress};
 use anyhow::{bail, Result};
 use ethers::prelude::Middleware;
 use futures::FutureExt;
 use jsonrpsee::tracing::{debug, error, trace, warn};
-use shared_types::Transaction;
+use shared_types::{ChunkArray, Transaction};
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::future::Future;
@@ -21,6 +22,8 @@ pub struct LogSyncManager {
     config: LogSyncConfig,
     log_fetcher: LogEntryFetcher,
     store: Arc<RwLock<dyn Store>>,
+    data_cache: DataCache,
+
     next_tx_seq: u64,
 }
 
@@ -46,11 +49,13 @@ impl LogSyncManager {
                     let log_fetcher =
                         LogEntryFetcher::new(&config.rpc_endpoint_url, config.contract_address)
                             .await?;
+                    let data_cache = DataCache::new(config.cache_config.clone());
                     let mut log_sync_manager = Self {
                         config,
                         log_fetcher,
                         next_tx_seq,
                         store,
+                        data_cache,
                     };
 
                     // Load previous progress from db and check if chain reorg happens after restart.
@@ -120,8 +125,7 @@ impl LogSyncManager {
     async fn put_tx(&mut self, tx: Transaction) -> bool {
         match tx.seq.cmp(&self.next_tx_seq) {
             Ordering::Less => {
-                // FIXME(zz): Handle reorg after restart.
-                debug!("revert for chain reorg: seq={}", tx.seq);
+                warn!("revert for chain reorg: seq={}", tx.seq);
                 match self.store.read().await.get_tx_by_seq_number(tx.seq) {
                     Ok(Some(old_tx)) => {
                         if tx == old_tx {
@@ -135,28 +139,39 @@ impl LogSyncManager {
                     }
                 }
                 // TODO(zz): `wrapping_sub` here is a hack to handle the case of tx_seq=0.
+                {
+                    let store = self.store.read().await;
+                    for seq in tx.seq..self.next_tx_seq {
+                        if matches!(store.check_tx_completed(seq), Ok(true)) {
+                            if let Ok(Some(tx)) = store.get_tx_by_seq_number(seq) {
+                                // TODO(zz): Skip reading the rear padding data?
+                                if let Ok(Some(data)) =
+                                    store.get_chunks_by_tx_and_index_range(seq, 0, tx.num_entries())
+                                {
+                                    if !self.data_cache.add_data(
+                                        tx.data_merkle_root,
+                                        seq,
+                                        data.data,
+                                    ) {
+                                        // TODO(zz): Data too large. Save to disk?
+                                        warn!("large reverted data dropped for tx={:?}", tx);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // TODO: Process reverted transactions.
                 if let Err(e) = self.store.write().await.revert_to(tx.seq.wrapping_sub(1)) {
                     error!("revert_to fails: e={:?}", e);
                     return false;
                 }
                 self.next_tx_seq = tx.seq;
-                if let Err(e) = self.store.write().await.put_tx(tx) {
-                    error!("put_tx error: e={:?}", e);
-                    false
-                } else {
-                    self.next_tx_seq += 1;
-                    true
-                }
+                self.put_tx_inner(tx).await
             }
             Ordering::Equal => {
                 debug!("log entry sync get entry: {:?}", tx);
-                if let Err(e) = self.store.write().await.put_tx(tx) {
-                    error!("put_tx error: e={:?}", e);
-                    false
-                } else {
-                    self.next_tx_seq += 1;
-                    true
-                }
+                self.put_tx_inner(tx).await
             }
             Ordering::Greater => {
                 error!(
@@ -185,6 +200,33 @@ impl LogSyncManager {
             }
         }
         Ok(())
+    }
+
+    async fn put_tx_inner(&mut self, tx: Transaction) -> bool {
+        if let Err(e) = self.store.write().await.put_tx(tx.clone()) {
+            error!("put_tx error: e={:?}", e);
+            false
+        } else {
+            if let Some(data) = self.data_cache.pop_data(&tx.data_merkle_root) {
+                let mut store = self.store.write().await;
+                if let Err(e) = store
+                    .put_chunks(
+                        tx.seq,
+                        ChunkArray {
+                            data,
+                            start_index: 0,
+                        },
+                    )
+                    .and_then(|_| store.finalize_tx(tx.seq))
+                {
+                    error!("put_tx data error: e={:?}", e);
+                    return false;
+                }
+            }
+            self.data_cache.garbage_collect(self.next_tx_seq);
+            self.next_tx_seq += 1;
+            true
+        }
     }
 }
 
@@ -219,4 +261,5 @@ where
 }
 
 pub(crate) mod config;
+mod data_cache;
 mod log_entry_fetcher;

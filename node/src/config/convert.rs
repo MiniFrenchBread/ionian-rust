@@ -2,7 +2,7 @@
 
 use crate::IonianConfig;
 use ethereum_types::H256;
-use log_entry_sync::{ContractAddress, LogSyncConfig};
+use log_entry_sync::{CacheConfig, ContractAddress, LogSyncConfig};
 use miner::MinerConfig;
 use network::NetworkConfig;
 use rpc::RPCConfig;
@@ -73,11 +73,18 @@ impl IonianConfig {
             .log_contract_address
             .parse::<ContractAddress>()
             .map_err(|e| format!("Unable to parse log_contract_address: {:?}", e))?;
+        let cache_config = CacheConfig {
+            // 100 MB.
+            max_data_size: self.max_cache_data_size,
+            // This should be enough if we have about one Ionian tx per block.
+            tx_seq_ttl: self.cache_tx_seq_ttl,
+        };
         Ok(LogSyncConfig::new(
             self.blockchain_rpc_endpoint.clone(),
             contract_address,
             self.log_sync_start_block_number,
             self.confirmation_block_count,
+            cache_config,
         ))
     }
 
