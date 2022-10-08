@@ -9,10 +9,12 @@ from web3.middleware import construct_sign_and_send_raw_middleware
 from enum import Enum, unique
 from config.node_config import (
     GENESIS_PRIV_KEY,
+    GENESIS_PRIV_KEY1,
     TX_PARAMS,
     MINER_ID,
     NO_MERKLE_PROOF_FLAG,
     NO_SEAL_FLAG,
+    TX_PARAMS1,
 )
 from utility.simple_rpc_proxy import SimpleRpcProxy
 from utility.utils import (
@@ -234,14 +236,19 @@ class BlockchainNode(TestNode):
     def wait_for_start_mining(self):
         self._wait_for_rpc_connection(lambda rpc: int(rpc.eth_blockNumber(), 16) > 0)
 
-    def wait_for_transaction_receipt(self, w3, tx_hash, timeout=120):
+    def wait_for_transaction_receipt(self, w3, tx_hash, timeout=120, parent_hash=None):
         return w3.eth.wait_for_transaction_receipt(tx_hash, timeout)
 
     def setup_contract(self):
         w3 = Web3(HTTPProvider(self.rpc_url))
 
-        account = w3.eth.account.from_key(GENESIS_PRIV_KEY)
-        w3.middleware_onion.add(construct_sign_and_send_raw_middleware(account))
+        account1 = w3.eth.account.from_key(GENESIS_PRIV_KEY)
+        account2 = w3.eth.account.from_key(GENESIS_PRIV_KEY1)
+        w3.middleware_onion.add(
+            construct_sign_and_send_raw_middleware([account1, account2])
+        )
+        # account = w3.eth.account.from_key(GENESIS_PRIV_KEY1)
+        # w3.middleware_onion.add(construct_sign_and_send_raw_middleware(account))
 
         def deploy_contract(path, args=None):
             if args is None:
@@ -278,6 +285,18 @@ class BlockchainNode(TestNode):
         ).transact(TX_PARAMS)
         self.wait_for_transaction_receipt(w3, tx_hash)
 
+        # setup second account
+        amount = int(1e8)
+        tx_hash = token_contract.functions.transfer(account2.address, amount).transact(
+            TX_PARAMS
+        )
+        self.wait_for_transaction_receipt(w3, tx_hash)
+
+        tx_hash = token_contract.functions.approve(
+            flow_contract.address, amount
+        ).transact(TX_PARAMS1)
+        self.wait_for_transaction_receipt(w3, tx_hash)
+
         tx_hash = mine_contract.functions.setMiner(MINER_ID).transact(TX_PARAMS)
         self.wait_for_transaction_receipt(w3, tx_hash)
 
@@ -285,6 +304,13 @@ class BlockchainNode(TestNode):
 
     def get_contract(self, contract_address):
         w3 = Web3(HTTPProvider(self.rpc_url))
+
+        account1 = w3.eth.account.from_key(GENESIS_PRIV_KEY)
+        account2 = w3.eth.account.from_key(GENESIS_PRIV_KEY1)
+        w3.middleware_onion.add(
+            construct_sign_and_send_raw_middleware([account1, account2])
+        )
+
         contract_interface = json.load(open(self.contract_path, "r"))
         return w3.eth.contract(address=contract_address, abi=contract_interface["abi"])
 

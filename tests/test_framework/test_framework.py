@@ -16,7 +16,7 @@ from test_framework.bsc_node import BSCNode
 from test_framework.contract_proxy import FlowContractProxy, MineContractProxy
 from test_framework.ionian_node import IonianNode
 from test_framework.blockchain_node import BlockChainNodeType
-from test_framework.conflux_node import ConfluxNode
+from test_framework.conflux_node import ConfluxNode, connect_sample_nodes, sync_blocks
 
 from utility.utils import PortMin, is_windows_platform, wait_until
 
@@ -113,6 +113,14 @@ class TestFramework:
 
             for node in self.blockchain_nodes:
                 node.wait_for_start_mining()
+        elif self.blockchain_node_type == BlockChainNodeType.Conflux:
+            for node in self.blockchain_nodes:
+                node.wait_for_nodeid()
+
+            # make nodes full connected
+            if self.num_blockchain_nodes > 1:
+                connect_sample_nodes(self.blockchain_nodes, self.log)
+                sync_blocks(self.blockchain_nodes)
 
         contract, tx_hash, mine_contract = self.blockchain_nodes[0].setup_contract()
         self.contract = FlowContractProxy(contract, self.blockchain_nodes)
