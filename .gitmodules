@@ -5,3 +5,6 @@
 	path = ionian-contracts
         branch = compiled
 	url = https://github.com/Ionian-Web3-Storage/ionian-contracts-poc.git
+[submodule "ionian-kv"]
+	path = ionian-kv
+	url = https://github.com/MiniFrenchBread/ionian-kv.git
