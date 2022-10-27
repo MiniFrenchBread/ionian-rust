@@ -227,7 +227,6 @@ impl LogSyncManager {
                         }
                         e => {
                             error!("log put progress check rpc fails, e={:?}", e);
-                            bail!("log sync update progress error");
                         }
                     }
                 }
