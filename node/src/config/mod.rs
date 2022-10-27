@@ -24,6 +24,10 @@ build_config! {
     (max_cache_data_size, (usize), 100 * 1024 * 1024) // 100 MB
     (cache_tx_seq_ttl, (usize), 500)
 
+    (rate_limit_retries, (u32), 100)
+    (timeout_retries, (u32), 100)
+    (initial_backoff, (u64), 500)
+
     // rpc
     (rpc_enabled, (bool), true)
     (rpc_listen_address, (String), "127.0.0.1:5678".to_string())

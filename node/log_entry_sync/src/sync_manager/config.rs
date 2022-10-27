@@ -14,6 +14,14 @@ pub struct LogSyncConfig {
     pub confirmation_block_count: u64,
     /// Maximum number of event logs to poll at a time.
     pub log_page_size: u64,
+
+    // blockchain provider retry params
+    // the number of retries after a connection times out
+    pub rate_limit_retries: u32,
+    // the nubmer of retries for rate limited responses
+    pub timeout_retries: u32,
+    // the duration to wait before retry, in ms
+    pub initial_backoff: u64,
 }
 
 #[derive(Clone)]
@@ -25,6 +33,7 @@ pub struct CacheConfig {
 }
 
 impl LogSyncConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rpc_endpoint_url: String,
         contract_address: ContractAddress,
@@ -32,6 +41,9 @@ impl LogSyncConfig {
         confirmation_block_count: u64,
         cache_config: CacheConfig,
         log_page_size: u64,
+        rate_limit_retries: u32,
+        timeout_retries: u32,
+        initial_backoff: u64,
     ) -> Self {
         Self {
             rpc_endpoint_url,
@@ -40,6 +52,9 @@ impl LogSyncConfig {
             start_block_number,
             confirmation_block_count,
             log_page_size,
+            rate_limit_retries,
+            timeout_retries,
+            initial_backoff,
         }
     }
 }

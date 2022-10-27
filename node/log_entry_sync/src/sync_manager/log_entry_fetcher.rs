@@ -5,12 +5,13 @@ use append_merkle::{Algorithm, Sha3Algorithm};
 use contract_interface::{IonianFlow, SubmissionFilter};
 use ethers::abi::RawLog;
 use ethers::prelude::{BlockNumber, EthLogDecode, Http, Log, Middleware, Provider, U256};
-use ethers::providers::FilterKind;
+use ethers::providers::{FilterKind, HttpRateLimitRetryPolicy, RetryClient, RetryClientBuilder};
 use ethers::types::H256;
 use futures::StreamExt;
 use jsonrpsee::tracing::{debug, error, info};
 use shared_types::{DataRoot, Transaction};
 use std::collections::{BTreeMap, VecDeque};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use task_executor::TaskExecutor;
@@ -18,8 +19,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 pub struct LogEntryFetcher {
     contract_address: ContractAddress,
-    provider: Arc<Provider<Http>>,
     log_page_size: u64,
+    provider: Arc<Provider<RetryClient<Http>>>,
 
     confirmation_delay: u64,
 }
@@ -30,8 +31,20 @@ impl LogEntryFetcher {
         contract_address: ContractAddress,
         log_page_size: u64,
         confirmation_delay: u64,
+        rate_limit_retries: u32,
+        timeout_retries: u32,
+        initial_backoff: u64,
     ) -> Result<Self> {
-        let provider = Arc::new(Provider::try_from(url)?);
+        let provider = Arc::new(Provider::new(
+            RetryClientBuilder::default()
+                .rate_limit_retries(rate_limit_retries)
+                .timeout_retries(timeout_retries)
+                .initial_backoff(Duration::from_millis(initial_backoff))
+                .build(
+                    Http::from_str(url)?,
+                    Box::new(HttpRateLimitRetryPolicy::default()),
+                ),
+        ));
         // TODO: `error` types are removed from the ABI json file.
         Ok(Self {
             contract_address,
@@ -171,7 +184,7 @@ impl LogEntryFetcher {
     }
 
     async fn watch_loop(
-        provider: &Provider<Http>,
+        provider: &Provider<RetryClient<Http>>,
         filter_id: U256,
         watch_tx: &UnboundedSender<LogFetchProgress>,
         log_confirmation_queue: &mut LogConfirmationQueue,
@@ -207,7 +220,7 @@ impl LogEntryFetcher {
         Ok(progress.map(|p| p.0))
     }
 
-    pub fn provider(&self) -> &Provider<Http> {
+    pub fn provider(&self) -> &Provider<RetryClient<Http>> {
         self.provider.as_ref()
     }
 }
